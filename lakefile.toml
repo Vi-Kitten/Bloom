@@ -1,0 +1,10 @@
+name = "bloom"
+version = "0.1.0"
+defaultTargets = ["bloom"]
+
+[[lean_lib]]
+name = "Bloom"
+
+[[lean_exe]]
+name = "bloom"
+root = "Main"
