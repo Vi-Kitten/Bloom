@@ -24,14 +24,14 @@ enum LoopStep[out State, out U] {
 }
 
 interface Collector[in T, out U] {
-    fn give: T -> LoopStep Self U
+    fn give: T -> LoopStep[Self, U]
     fn end: U
 }
 
 pin interface Iterable[out T] {
-    pin fn collect[U]: Collector T U -> U
+    pin fn collect[U]: Collector[T, U] -> U
 
-    pin fn pop: Maybe T {
+    pin fn pop: Maybe[T] = {
         self.collect new Collector {
             give item = Exit $ Some item
             end = None

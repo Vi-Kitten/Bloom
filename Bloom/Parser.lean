@@ -1,15 +1,5 @@
 abbrev Token: Type := Unit
 
-abbrev TokenErr: Type := Unit
-
-inductive BranchErr (entry_err entered_err : Type) where
-    | on_entry : entry_err -> BranchErr entry_err entered_err
-    | after_entered : entered_err -> BranchErr entry_err entered_err
-
-inductive BranchingErr (entry_err entered_err : Type) where
-    | selection_failures : Array entry_err -> BranchingErr entry_err entered_err
-    | canonical_failure : entered_err -> BranchingErr entry_err entered_err
-
 structure Parser (e: Type) (d : Nat) (m : Type -> Type) (A : Type) where
     parse {n: Nat} (_ : Vector Token n) :
         m <| Except e <| A × {consumed : Nat // d ≤ consumed ∧ consumed ≤ n}
@@ -31,11 +21,6 @@ def hoist_err [Functor m] (f: e -> e') (mx: Parser e d m a): Parser e' d m a whe
         | .ok x => .ok x
         | .error err => .error <| f err
 
-instance: Coe (BranchErr e f) (BranchingErr e f) where
-    coe := fun
-        | .on_entry err => .selection_failures #[err]
-        | .after_entered err => .canonical_failure err
-
 instance [Functor m] [Coe e e']:
     Coe (Parser e d m a) (Parser e' d m a) where
 
@@ -46,7 +31,35 @@ instance (p : Parser e d m a) [Functor m]:
 
     coe := coerce_down (Nat.zero_le d) p
 
+-- MARK: Fundimental
+
+def eof [Applicative m] (err: e): Parser e 0 m Unit where
+    parse := fun {n: Nat} (_: Vector _ n) => pure <| match n with
+        | 0 => .ok ((), ⟨0, by decide, by decide⟩)
+        | _ => .error err
+
+def Parser.layer [Monad m] (mx: Parser e d m a) (f: a -> Parser e d' m b): Parser e d m b where
+    parse := fun ts => do
+        match <- mx.parse ts with
+            | .error err => return .error err
+            | .ok (x, consumed) => match <- (f x).parse (ts.shrink consumed) with
+                | .error err => return .error err
+                | .ok (y, _) => return .ok (y, consumed)
+
 -- MARK: Branching
+
+inductive BranchErr (entry_err entered_err : Type) where
+    | on_entry : entry_err -> BranchErr entry_err entered_err
+    | after_entered : entered_err -> BranchErr entry_err entered_err
+
+inductive BranchingErr (entry_err entered_err : Type) where
+    | selection_failures : Array entry_err -> BranchingErr entry_err entered_err
+    | canonical_failure : entered_err -> BranchingErr entry_err entered_err
+
+instance: Coe (BranchErr entry_err entered_err) (BranchingErr entry_err entered_err) where
+    coe := fun
+        | .on_entry err => .selection_failures #[err]
+        | .after_entered err => .canonical_failure err
 
 def common_branch [Monad m]
     (mx: Parser (BranchingErr entry_err entered_err) d m a)
@@ -70,8 +83,8 @@ def branch [Monad m]
     : Parser (BranchingErr entry_err entered_err) d m a
     := coerce_down (Nat.min_self d |> Eq.symm |> Nat.le_of_eq) <| common_branch mx my
 
-infixl:20 "-<:>" => common_branch
-infixl:20 "<:>" => branch
+infixl:20 " -<:> " => common_branch
+infixl:20 " <:> " => branch
 
 def common_alt [Monad m]
     (mx: Parser e d m a)
@@ -119,7 +132,7 @@ def addative_bind [Monad m]
     : Parser e (d + d') m b
     := addative_join <| f <$> mx
 
-infixl:55 "+>>=" => addative_bind
+infixl:55 " +>>= " => addative_bind
 
 def addative_apply [Monad m]
     (mf: Parser e d m (a -> b))
@@ -127,7 +140,7 @@ def addative_apply [Monad m]
     : Parser e (d + d') m b
     := mf +>>= Functor.mapRev mx
 
-infixl:100 "<+>" => addative_apply
+infixl:100 " <+> " => addative_apply
 
 def compose_discard [Monad m]
     (mx: Parser e d m a)
@@ -135,7 +148,7 @@ def compose_discard [Monad m]
     : Parser e (d + d') m b
     := ((fun _ y => y) <$> mx) <+> my
 
-infixl:60 ">+>" => compose_discard
+infixl:60 " >+> " => compose_discard
 
 def compose_preserve [Monad m]
     (mx: Parser e d m a)
@@ -143,7 +156,7 @@ def compose_preserve [Monad m]
     : Parser e (d + d') m a
     := ((fun x _ => x) <$> mx) <+> my
 
-infixl:60 "<+<" => compose_preserve
+infixl:60 " <+< " => compose_preserve
 
 instance {e : Type} {m: Type -> Type} [Monad m]: Monad (Parser e 0 m) where
     pure x := { parse := fun {n: Nat} (_: Vector _ n) =>
@@ -151,7 +164,61 @@ instance {e : Type} {m: Type -> Type} [Monad m]: Monad (Parser e 0 m) where
     }
     bind mx f := mx +>>= f
 
+-- MARK: Recovery
+
+def Parser.recover [Monad m]
+    (mx: Parser e d m a)
+    : Parser Empty 0 m (Except e a) where
+    parse := fun {n: Nat} (ts: Vector _ n) => do
+        match <- mx.parse ts with
+            | .ok (x, ⟨consumed, lower, upper⟩) => return .ok (.ok x, ⟨
+                consumed,
+                Nat.zero_le d +<=+ lower,
+                upper
+            ⟩)
+            | .error err => return .ok (.error err, ⟨0, by decide, Nat.zero_le n⟩)
+
+def Parser.opt [Monad m]
+    (mx: Parser e d m a)
+    : Parser Empty 0 m (Option a)
+    := Except.toOption <$> mx.recover
+
+inductive RecoveryBundle (e a : Type) where
+    | errors : Vector e n -> n >= 1 -> RecoveryBundle e a
+    | parsed : a -> RecoveryBundle e a
+
+def bundle_err (err: e): RecoveryBundle e Never := .errors #v[err] (by decide)
+
+instance: Applicative (RecoveryBundle err) where
+    map f := fun
+        | .errors errs h => .errors errs h
+        | .parsed x => .parsed (f x)
+    pure x := .parsed x
+    seq mf pmx := match mf, (pmx ()) with
+        | .errors errs h, .errors errs' h' => .errors
+            (Vector.append errs errs')
+            (by decide +<=+ Nat.add_le_add h h')
+        | .errors err h, .parsed _ => .errors err h
+        | .parsed _, .errors err' h' => .errors err' h'
+        | .parsed f, .parsed x => .parsed <| f x
+
+def Parser.bundle [Monad m]
+    (mx: Parser e d m a)
+    (my: Parser e' d' m b)
+    : Parser e d m (RecoveryBundle e' b) := mx.layer (fun _ => hoist_err Empty.elim my.recover)
+        <&> fun
+            | .ok y => .parsed y
+            | .error err => bundle_err err
+
 -- MARK: Recursion
+
+def Parser.most [Monad m]
+    (mx: Parser e d m a)
+    (h: d >= 1)
+    : (Parser Empty 0 m (List a))
+    := ((List.cons <$> mx) <+> (hoist_err Empty.elim <| mx.most h)).opt <&> fun
+        | .none => []
+        | .some xs => xs
 
 -- no clue how I am going to do this erganomically NGL
 -- ideally I can find a way to interact with leans implicit halting checker
