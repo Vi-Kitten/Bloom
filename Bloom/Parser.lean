@@ -1,281 +1,289 @@
-class DefaultErr (e: Type) where
-    silent : e
+import Bloom.Basic
 
 /--
-    Parses some number of tokens `t` within the input stream to produce a result.
-    The process of taking in the input stream and producing a result
-    emmits an effect in the transformed monad `m` **before** erroring occurs.
+  Parses some number of tokens `t` within the input stream to produce a result.
+  The process of taking in the input stream and producing a result
+  emits an effect in the transformed monad `m` **before** erroring occurs.
 -/
-structure Parser (t e: Type) (m : Type -> Type) (a : Type) where
-    parse {n: Nat} (_ : Vector t n) :
-        m <| Except e <| a × {consumed : Nat // consumed ≤ n}
+def ParserT (t e : Type) (m : Type -> Type) (a : Type) :=
+  (ts : Array t) -> (ExceptT e m <| a × Fin (ts.size + 1))
 
-instance [Monad m]: MonadLift m (Parser t e m) where
-    monadLift mx := { parse {n: Nat} _ := mx <&> fun x => .ok (x, ⟨0, Nat.zero_le n⟩) }
+instance [Monad m] : Monad (ParserT t e m) where
+  map f mx := fun ts => mx ts <&> Prod.map f id
+  pure x := fun _ => return (x, 0)
+  bind mx f := fun ts => do
+    let (x, ⟨consumed, _⟩) <- mx ts
+    let (y, ⟨consumed', _⟩) <- f x (ts.drop consumed)
+    return (y, ⟨consumed + consumed', by grind⟩)
 
-instance [Monad m]: MonadLift (Except e) (Parser t e m) where
-    monadLift mx := { parse {n: Nat} _ := return mx <&> fun x => (x, ⟨0, Nat.zero_le n⟩)}
+instance [Monad m] : MonadLift (ExceptT e m) (ParserT t e m) where
+  monadLift mx := fun _ => return (<- mx, 0)
 
 /--
-    Runs the parser on a given token array, consuming everything is not required.
+  Maps the parsers error type.
 -/
-def Parser.run [Functor m]
-    (mx: Parser t e m a)
-    (arr: Array t)
-    : m <| Except e a
-    := mx.parse (arr.toVector) <&> Except.map fun (x, _) => x
+def ParserT.adapt [Monad m]
+    (mx : ParserT t e m a)
+    (f : e -> e')
+    : ParserT t e' m a
+  := fun ts => ExceptT.adapt f (mx ts)
 
-infixl:60 " +<=+ " => Nat.le_trans
+/--
+  On failure, runs the recovery function.
+  (may adapt the error type)
+-/
+def ParserT.catchAdapt [Monad m]
+    (mx: ParserT t e m a)
+    (f : e -> ParserT t e' m a)
+    : (ParserT t e' m a) := fun ts => do
+  match <- (mx ts).run with
+    | .ok x => return x
+    | .error err => f err ts
+
+infixl:20 " <?> " => ParserT.catchAdapt
+
+infixl:20 " ?> " => fun mx e => mx <?> fun _ => throw e
+
+infixr:20 " <? " => fun e mx => mx <?> fun _ => throw e
+
+instance [Monad m] : MonadExcept e (ParserT t e m) where
+  throw e := fun _ => throw e
+  tryCatch body handler := body <?> handler
+
+/--
+  Runs the parser on a given token array, consuming everything is not required.
+-/
+def ParserT.run [Monad m] (mx : ParserT t e m a) (arr : Array t):
+  ExceptT e m a := mx arr <&> fun (x, _) => x
 
 -- MARK: Fundimental
 
 /--
-    Only succeeds on end of stream, otherwise raises the given error.
+  F
 -/
-def eos [Applicative m] (err: e): Parser t e m Unit where
-    parse {n: Nat} _ := pure <| match n with
-        | 0 => .ok ((), ⟨0, by decide⟩)
-        | _ => .error err
+
+def ParserT.scry [Monad m] (mx : ParserT t e m a): ParserT t e m a :=
+  fun arr => mx arr <&> fun (x, _) => (x, 0)
 
 /--
-    Runs the given parser within the consumed tokens of the original parser.
+  Only succeeds on end of stream, otherwise raises the given error.
 -/
-def Parser.layer [Monad m]
-    (mx: Parser t e m a)
-    (f: a -> Parser t e m b):
-    Parser t e m b where
-    parse ts := mx.parse ts >>= fun
-        | .error err => return .error err
-        | .ok (x, consumed) => (f x).parse (ts.shrink consumed)
-            <&> Except.map fun (y, _) => (y, consumed)
+def eos [Monad m] (err : e) : ParserT t e m Unit :=
+  fun arr => if arr.isEmpty then return ((), 0) else throw err
 
 /--
-    **Always** fails, throws the given error.
+  Runs the given parser within the consumed tokens of the original parser.
 -/
-def throw [Monad m]
-    (err: e)
-    : Parser t e m a where
-    parse _ := return .error err
+def ParserT.layer [Monad m]
+    (mx : ParserT t e m a)
+    (f : a -> ParserT t e m b):
+    ParserT t e m b := fun ts => do
+  let (x, consumed) <- mx ts
+  let (y, _) <- f x <| ts.shrink consumed
+  return (y, consumed)
 
-/--
-    On failure, runs the recovery function.
--/
-def Parser.catch [Monad m]
-    (mx: Parser t e m a)
-    (f: e -> Parser t e' m a)
-    : (Parser t e' m a) where
-    parse ts := mx.parse ts >>= fun
-        | .ok (x, consumed) => return .ok (x, consumed)
-        | .error err => (f err).parse ts
-
-infixl:20 " <?> " => Parser.catch
-
-infixl:20 " <? " => fun e mx => Parser.catch mx (fun _ => throw e)
-
-infixl:20 " ?> " => fun mx e => Parser.catch mx (fun _ => throw e)
-
-/--
-    Maps the parsers error type.
--/
-def Parser.map_err [Functor m]
-    (mx: Parser t e m a)
-    (f: e -> e')
-    : Parser t e' m a where
-    parse ts := mx.parse ts <&> Except.mapError f
-
-instance [Functor m] [Coe e e']: Coe (Parser t e m a) (Parser t e' m a) where
-    coe mx := mx.map_err Coe.coe
+instance [Monad m] [Coe e e'] : Coe (ParserT t e m a) (ParserT t e' m a) where
+  coe mx := mx.adapt Coe.coe
 
 -- MARK: Combinators
 
 /--
-    Match a single token, **transformatively**.
+  Match a single token, **transformatively**.
 -/
-def single_trans [Functor m]
-    (unexpected_end: m e)
-    (f: t -> m (Except e a))
-    : Parser t e m a where
-    parse {n: Nat} ts := match n with
-        | 0 => .error <$> unexpected_end
-        | .succ n' => f (ts.get 1)
-            <&> Except.map fun x => (x, ⟨0, Nat.zero_le n'.succ⟩)
+def singleTrans [Monad m]
+    (unexpectedEnd : m e)
+    (f : t -> ExceptT e m a)
+    : ParserT t e m a := fun ts =>
+  match h : ts.size with
+    | 0 => do throw (<- unexpectedEnd)
+    | n+1 => return ((<- f ts[0]), 0)
 
 /--
-    Match a single token.
+  Match a single token.
 -/
-def single [Applicative m]
-    (unexpected_end: e)
-    (f: t -> Except e a)
-    : Parser t e m a where
-    parse {n: Nat} ts := pure <| match n with
-        | 0 => .error unexpected_end
-        | .succ n' => f (ts.get 1)
-            <&> fun x => (x, ⟨0, Nat.zero_le n'.succ⟩)
+def single [Monad m]
+    (unexpectedEnd : e)
+    (f : t -> Except e a)
+    : ParserT t e m a := fun ts =>
+  match h : ts.size with
+    | 0 => throw unexpectedEnd
+    | n+1 => (f ts[0]).map fun a => (a, 0)
 
 /--
-    Matches **any** token.
+  Matches **any** token.
 -/
-def any [Applicative m]
-    (unexpected_end: e)
-    : Parser t e m t
-    := single unexpected_end .ok
-
-instance [Functor m]: Functor (Parser t e m) where
-    map f mx := { parse ts := mx.parse ts <&> Except.map (Prod.map f id)}
-
-instance [Monad m]: Monad (Parser t e m) where
-    pure x := { parse {n: Nat} _ := pure <| pure <| (x, ⟨0, Nat.zero_le n⟩) }
-    bind mx f :=  { parse ts := mx.parse ts >>= fun
-        | .error err => return .error err
-        | .ok (x, ⟨consumed, bound⟩) => (f x).parse (ts.drop consumed)
-            <&> Except.map fun (y, ⟨consumed', bound'⟩) => (y, ⟨
-                consumed + consumed',
-                Nat.le_of_eq (Nat.add_comm consumed consumed')
-                +<=+ Nat.add_le_add_right bound' consumed
-                +<=+ Nat.le_of_eq (Nat.sub_add_cancel bound)
-            ⟩)
-    }
+def any [Monad m]
+    (unexpectedEnd : e)
+    : ParserT t e m t
+  := single unexpectedEnd .ok
 
 -- MARK: Branching
 
 /--
-    An error type to be returned by error-semantic parser branches.
-    - Errors `on_entry` signify that the parsed tokens were not unique to the branch.
-    - Errors `after_entered` signify that the parsed tokens can only belong to the branch.
+  An error type to be returned by error-semantic parser branches.
+  - Errors `onEntry` signify that the parsed tokens were not unique to the branch.
+  - Errors `afterEntered` signify that the parsed tokens can only belong to the branch.
 -/
-inductive BranchErr (entry_err entered_err : Type) where
-    | on_entry : entry_err -> BranchErr entry_err entered_err
-    | after_entered : entered_err -> BranchErr entry_err entered_err
+inductive BranchErr (EntryErr EnteredErr : Type) where
+  | onEntry : EntryErr -> BranchErr EntryErr EnteredErr
+  | afterEntered : EnteredErr -> BranchErr EntryErr EnteredErr
 
 /--
-    The error type of a parser mid-branching.
+  Makes the branch expect the parser as part of entry.
 -/
-inductive BranchingErr (entry_err entered_err : Type) where
-    | selection_failures : List entry_err -> BranchingErr entry_err entered_err
-    | canonical_failure : entered_err -> BranchingErr entry_err entered_err
-
-instance: DefaultErr (BranchingErr entry_err entered_err) where
-    silent := .selection_failures []
-
-instance: Coe (BranchErr entry_err entered_err) (BranchingErr entry_err entered_err) where
-    coe := fun
-        | .on_entry err => .selection_failures [err]
-        | .after_entered err => .canonical_failure err
+def ParserT.expect [Monad m]
+    (mx: ParserT t e m a)
+    : ParserT t (BranchErr e e') m a
+  := mx.adapt .onEntry
 
 /--
-    Unlike alternative the leftmost success or `.canonical_failure` is retuend,
-    otherwise all `.selection_failures` are tracked.
+  Marks the entry of a branch, should only be used after a `return`, for example:
+  ```lean4
+  do
+    let _ <- some_parser.expect
+    ...
+    return require do
+      ...
+  ```
+-/
+def require [Monad m]
+    (mx: ParserT t e m a)
+    : ParserT t (BranchErr e' e) m a
+  := mx.adapt .afterEntered
+
+/--
+  The error type of a parser mid-branching.
+-/
+inductive BranchingErr (EntryErr EnteredErr : Type) where
+  | selectionFailures : PopulatedList EntryErr -> BranchingErr EntryErr EnteredErr
+  | canonicalFailure : EnteredErr -> BranchingErr EntryErr EnteredErr
+
+class DefaultErr (e : Type) where
+  silent : e
+
+instance : Coe (BranchErr EntryErr EnteredErr) (BranchingErr EntryErr EnteredErr) where
+  coe
+  | .onEntry err => .selectionFailures <| err ::| []
+  | .afterEntered err => .canonicalFailure err
+
+/--
+  Unlike alternative the leftmost success or `.canonicalFailure` is retuend,
+  otherwise all `.selectionFailures` are tracked.
 -/
 def split [Monad m]
-    (mx: Parser t (BranchingErr entry_err entered_err) m a)
-    (my: Parser t (BranchingErr entry_err entered_err) m a)
-    : Parser t (BranchingErr entry_err entered_err) m a where
-    parse ts := mx.parse ts >>= fun
-        | .ok (x, consumed) => return .ok (x, consumed)
-        | .error (.canonical_failure err) => return .error (.canonical_failure err)
-        | .error (.selection_failures errs) => my.parse ts <&> fun
-            | .ok (y, consumed) => .ok (y, consumed)
-            | .error (.canonical_failure err) => .error (.canonical_failure err)
-            | .error (.selection_failures errs') =>.error (.selection_failures <| errs ++ errs')
+    (mx : ParserT t (BranchingErr EntryErr EnteredErr) m a)
+    (my : ParserT t (BranchingErr EntryErr EnteredErr) m a)
+    : ParserT t (BranchingErr EntryErr EnteredErr) m a :=
+  try mx catch
+  | .selectionFailures errs =>
+    try my catch
+    | .selectionFailures errs' =>
+      throw (.selectionFailures <| errs ++ errs')
+    | e => throw e
+  | e => throw e
+
 
 infixl:20 " <:> " => split
 
 /--
-    Splits parsing between multiple branches and unifies the resulting `BranchingErr`.
+  Splits parsing between multiple branches and unifies the resulting `BranchingErr`.
 -/
 def branch [Monad m]
-    (raise: List entry_err -> e)
-    (mxs: List (Parser t (BranchingErr entry_err e) m a))
-    : Parser t e m a
-    := (mxs.foldl split <| throw DefaultErr.silent).map_err fun
-        | .canonical_failure err => err
-        | .selection_failures errs => raise errs
+    (combine : PopulatedList entry_err -> e)
+    (mxs : PopulatedList (ParserT t (BranchErr entry_err e) m a))
+    : ParserT t e m a
+  := (mxs <&> fun mx => (mx : ParserT t (BranchingErr entry_err e) m a)).foldHead split <?> fun
+    | .canonicalFailure err => throw err
+    | .selectionFailures errs => throw <| combine errs
 
-instance [Monad m] [DefaultErr e]: Alternative (Parser t e m) where
-    failure := throw DefaultErr.silent
-    orElse mx my := mx <?> fun _ => my ()
+instance [Monad m] [DefaultErr e]: Alternative (ParserT t e m) where
+  failure := throw DefaultErr.silent
+  orElse mx my := do
+    try
+      mx
+    catch _ => my ()
 
 -- MARK: Recovery
 
 /--
-    **Always** succeeds returning either the parsed value or caught error.
+  **Always** succeeds returning either the parsed value or caught error.
 -/
-def Parser.recover [Monad m]
-    (mx: Parser t e m a)
-    : Parser t e' m (Except e a)
-    := mx
-        <&> (.ok)
-        <?> fun err => return .error err
+def ParserT.recover [Monad m]
+    (mx : ParserT t e m a)
+    : ParserT t e' m (Except e a)
+  := mx
+    <&> (.ok)
+    <?> fun err => return .error err
 
 /--
-    **Always** succeeds returning some parsed value if present or nothing if there was an error.
+  **Always** succeeds returning some parsed value if present or nothing if there was an error.
 -/
-def Parser.opt [Monad m]
-    (mx: Parser t e m a)
-    : Parser t e' m (Option a)
-    := mx
-        <&> (.some)
-        <?> fun _ => return .none
+def ParserT.opt [Monad m]
+    (mx : ParserT t e m a)
+    : ParserT t e' m (Option a)
+  := mx
+    <&> (.some)
+    <?> fun _ => return .none
 
 /--
-    Bundles multiple recovered errors together ready to be composed and thrown.
+  Bundles multiple recovered errors together ready to be composed and thrown.
 -/
 inductive RecoveryBundle (e a : Type) where
-    | errors : Vector e n -> n >= 1 -> RecoveryBundle e a
+    | errors : PopulatedList e -> RecoveryBundle e a
     | parsed : a -> RecoveryBundle e a
 
 /--
-    Constructs a `RecoveryBundle` from an error.
+  Constructs a `RecoveryBundle` from an error.
 -/
-def bundle_err (err: e): RecoveryBundle e Never := .errors #v[err] (by decide)
+def bundle_err (err: e): RecoveryBundle e Never := .errors <| err ::| []
 
-instance: Applicative (RecoveryBundle err) where
-    map f := fun
-        | .errors errs h => .errors errs h
-        | .parsed x => .parsed (f x)
-    pure x := .parsed x
-    seq mf pmx := match mf, (pmx ()) with
-        | .errors errs h, .errors errs' h' => .errors (errs ++ errs') (by decide +<=+ Nat.add_le_add h h')
-        | .errors err h, .parsed _ => .errors err h
-        | .parsed _, .errors err' h' => .errors err' h'
-        | .parsed f, .parsed x => .parsed <| f x
+instance : Applicative (RecoveryBundle err) where
+  map f := fun
+    | .errors errs => .errors errs
+    | .parsed x => .parsed (f x)
+  pure x := .parsed x
+  seq mf pmx := match mf, (pmx ()) with
+    | .errors errs, .errors errs' => .errors (errs ++ errs')
+    | .errors err, .parsed _ => .errors err
+    | .parsed _, .errors err' => .errors err'
+    | .parsed f, .parsed x => .parsed <| f x
 
 /--
-    Layers a recovered parser ontop of the initial parser,
-    converting the recovered `Except` into a `RecoveryBundle`
-    in preparation for error bundling.
+  Layers a recovered parser ontop of the initial parser,
+  converting the recovered `Except` into a `RecoveryBundle`
+  in preparation for error bundling.
 -/
-def Parser.bundle [Monad m]
-    (mx: Parser t e m a)
-    (my: Parser t e' m b)
-    : Parser t e m (RecoveryBundle e' b) := mx.layer (fun _ => my.recover)
-        <&> fun
-            | .ok y => .parsed y
-            | .error err => bundle_err err
+def ParserT.bundle [Monad m]
+    (mx : ParserT t e m a)
+    (my : ParserT t e' m b)
+    : ParserT t e m (RecoveryBundle e' b)
+  := mx.layer (fun _ => my.recover) <&> fun
+    | .ok y => .parsed y
+    | .error err => bundle_err err
 
 -- MARK: Recursion
 
 /--
-    Repeaedly parses until failure.
+  Repeaedly parses until failure.
 -/
-partial def Parser.most [Monad m]
-    (mx: Parser t e m a)
-    : (Parser t e' m (List a))
-    := mx
-        >>= (fun x => List.cons x <$> mx.most)
-        <?> fun _ => return []
+unsafe def ParserT.most [Monad m]
+    (mx : ParserT t e m a)
+    : (ParserT t e' m (List a))
+  := mx
+    >>= (fun x => List.cons x <$> mx.most)
+    <?> fun _ => return []
 
 /--
-    Parses the least amount of the original term until the specified end.
-    Will only provide the error of the expected end.
+  Parses the least amount of the original term until the specified end.
+  Will only provide the error of the expected end.
 -/
-partial def Parser.least_until [Monad m]
-    (mx: Parser t e m a)
-    (my: Parser t e' m b)
-    : (Parser t e' m (List a × b))
-    := my
-        <&> (fun y => ([], y))
-        <?> fun err => do
-            let x <- mx ?> err
-            let (xs, y) <- mx.least_until my
-            return (x :: xs, y)
+unsafe def ParserT.least_until [Monad m]
+    (mx : ParserT t e m a)
+    (my : ParserT t e' m b)
+    : (ParserT t e' m (List a × b))
+  := my
+    <&> (fun y => ([], y))
+    <?> fun err => do
+      let x <- mx ?> err
+      let (xs, y) <- mx.least_until my
+      return (x :: xs, y)
