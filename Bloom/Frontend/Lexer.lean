@@ -1,44 +1,88 @@
 -- MARK: Charecters
 
 inductive LexChar where
-  | openCurly : LexChar
-  | closeCurly : LexChar
-  | openSquare : LexChar
-  | closeSquare : LexChar
-  | openParens : LexChar
-  | closeParens : LexChar
-  | backSlash : LexChar
-  | doubleQuote : LexChar
-  | hashtag : LexChar
-  | newLine : LexChar
+  | openCurly
+  | closeCurly
+  | openSquare
+  | closeSquare
+  | openParens
+  | closeParens
+  | backSlash
+  | doubleQuote
+  | hashtag
+  | newLine
   | inlineWhiteSpace : Char -> LexChar
-  | comma : LexChar
-  | semicolon : LexChar
+  | comma
+  | semicolon
   | symbolic : Char -> LexChar
-  | underscore : LexChar
+  | underscore
   | digit : Fin 10 -> LexChar
   | lowercase : Char -> LexChar
   | uppercase : Char -> LexChar
+  deriving Repr
 
 inductive LexerError
-  | unclosedString : LexerError
+  | unclosedString
   | invalidEscape : LexChar -> LexerError
-  | unclosedCurly : LexerError
-  | unexpectedCloseCurly : LexerError
+  | unclosedCurly
+  | unexpectedCloseCurly
   | expectedFound : String -> LexChar -> LexerError
   | invalidSnake : LexChar -> LexerError
   | invalidPascal : LexChar -> LexerError
-  | unexpectedEOS : LexerError
+  | unexpectedEOS
   | reservedCharecter : Char -> LexerError
   | unclassifiableCharecter : Char -> LexerError
+  deriving Repr
 
-def classify (c : Char): Except LexerError LexChar :=
-  if c == '\n' then
-    return .newLine
-  else if c.isWhitespace then
+def classify: Char -> Except LexerError LexChar := fun
+  | '{'  => return .openCurly
+  | '}'  => return .closeCurly
+  | '['  => return .openSquare
+  | ']'  => return .closeSquare
+  | '('  => return .openParens
+  | ')'  => return .closeParens
+  | '\\' => return .backSlash
+  | '"'  => return .doubleQuote
+  | '#'  => return .hashtag
+  | '\n' => return .newLine
+  | ','  => return .comma
+  | ';'  => return .semicolon
+  | '_'  => return .underscore
+  | '0'  => return .digit 0
+  | '1'  => return .digit 1
+  | '2'  => return .digit 2
+  | '3'  => return .digit 3
+  | '4'  => return .digit 4
+  | '5'  => return .digit 5
+  | '6'  => return .digit 6
+  | '7'  => return .digit 7
+  | '8'  => return .digit 7
+  | '9'  => return .digit 8
+  | '<'  => return .symbolic '<'
+  | '>'  => return .symbolic '>'
+  | '^'  => return .symbolic '^'
+  | '$'  => return .symbolic '$'
+  | '%'  => return .symbolic '%'
+  | '*'  => return .symbolic '*'
+  | '+'  => return .symbolic '+'
+  | '-'  => return .symbolic '-'
+  | '/'  => return .symbolic '/'
+  | '~'  => return .symbolic '~'
+  | '|'  => return .symbolic '|'
+  | '&'  => return .symbolic '&'
+  | '='  => return .symbolic '='
+  | '.'  => return .symbolic '.'
+  | ':'  => return .symbolic ':'
+  | '!'  => return .symbolic '!'
+  | '?'  => return .symbolic '?'
+  | '@'  => throw <| .reservedCharecter '@'
+  | '`'  => throw <| .reservedCharecter '`'
+  | c => if c.isWhitespace then
     return .inlineWhiteSpace c
-  else if c == '_' then
-    return .underscore
+  else if c.isLower then
+    return .lowercase c
+  else if c.isUpper then
+    return .uppercase c
   else
     throw <| .unclassifiableCharecter c
 
@@ -75,25 +119,26 @@ def LexChar.print : LexChar -> Char := fun
 
 inductive LexerToken
   | indentation : String -> LexerToken
-  | whiteSpace : LexerToken
+  | whiteSpace
   | symbolic : String -> LexerToken
   | snake : String -> LexerToken
   | pascal : String -> LexerToken
-  | openCurly : LexerToken
-  | closeCurly : LexerToken
-  | decorator : LexerToken
-  | openSquare : LexerToken
-  | closeSquare : LexerToken
-  | openParens : LexerToken
-  | closeParens : LexerToken
-  | comma : LexerToken
-  | semicolon : LexerToken
+  | openCurly
+  | closeCurly
+  | decorator
+  | openSquare
+  | closeSquare
+  | openParens
+  | closeParens
+  | comma
+  | semicolon
   | documentationComment : String -> LexerToken
   | stringLiteral : String -> LexerToken
   | stringInterpolateStart : String -> LexerToken
   | StringInterpolateMiddle : String -> LexerToken
   | stringInterpolateEnd : String -> LexerToken
   | natural : Nat -> LexerToken
+  deriving Repr
 
 structure LexerEffect (a : Type) where
   tokens: Except LexerError (Array LexerToken × a)
@@ -124,8 +169,8 @@ def yieldToken
 -- MARK: Lexer
 
 inductive StringStart
-  | regular : StringStart
-  | fromInterpolation : StringStart
+  | regular
+  | fromInterpolation
 
 def StringStart.endRegular : StringStart -> String -> LexerToken := fun
   | .regular => .stringLiteral
@@ -136,22 +181,22 @@ def StringStart.endInterpolate : StringStart -> String -> LexerToken := fun
   | .fromInterpolation => .StringInterpolateMiddle
 
 inductive CommentFlavour
-  | regular : CommentFlavour
-  | documentation : CommentFlavour
+  | regular
+  | documentation
 
 inductive LexerState
   | string : StringStart -> String -> LexerState
   | stringEscaped : StringStart -> String -> LexerState
   | indentation : String -> LexerState
-  | hashtag : LexerState
-  | hashtagVertibar : LexerState
+  | hashtag
+  | hashtagVertibar
   | comment : CommentFlavour -> String -> LexerState
   | symbolic : String -> LexerState
   | snake : String -> LexerState
   | pascal : String -> LexerState
   | number : Array (Fin 10) -> LexerState
-  | whiteSpace : LexerState
-  | waiting : LexerState
+  | whiteSpace
+  | waiting
 
 def LexerState.close : LexerState -> LexerEffect Unit := fun
   | .string _ _ => failLexing .unclosedString
@@ -170,8 +215,8 @@ def LexerState.close : LexerState -> LexerEffect Unit := fun
   | .waiting => return ()
 
 inductive ContextLayer
-  | openCurly : ContextLayer
-  | interpolation : ContextLayer
+  | openCurly
+  | interpolation
 
 structure Lexer where
   context : List ContextLayer

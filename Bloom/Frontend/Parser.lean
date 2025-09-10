@@ -59,7 +59,7 @@ def ParserT.run [Monad m] (mx : ParserT t e m a) (arr : Array t):
 -- MARK: Fundimental
 
 /--
-  F
+  Backtrack on success.
 -/
 
 def ParserT.scry [Monad m] (mx : ParserT t e m a): ParserT t e m a :=
