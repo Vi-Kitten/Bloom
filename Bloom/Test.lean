@@ -9,6 +9,8 @@ import Bloom.Basic
     tabSize := 4
   }
   match lex info text with
-    | .error err => IO.println <| repr err
+    | .error (pos, err) => do
+      IO.println <| repr pos
+      IO.println <| repr err
     | .ok toks => for t in Id.run <| composite toks.toList do
       IO.println <| repr t

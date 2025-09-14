@@ -143,7 +143,7 @@ inductive LexerToken
   deriving Repr
 
 structure LexerEffect (a : Type) where
-  tokens: Except LexerError (Array (Located LexerToken) × a)
+  tokens: Except (Position × LexerError) (Array (Located LexerToken) × a)
 
 instance : Monad LexerEffect where
   pure x := LexerEffect.mk <| return (#[], x)
@@ -161,12 +161,6 @@ def beforeChar : PositionalLexerEffect Position := do
 def afterChar : PositionalLexerEffect Position := do
   let (_, after) <- ReaderT.read
   return after
-
-def liftLexerError (mx: Except LexerError a): LexerEffect a
-  := LexerEffect.mk <| return (#[], <- mx)
-
-instance : MonadLift (Except LexerError) LexerEffect where
-  monadLift := liftLexerError
 
 -- MARK: Position
 
@@ -228,10 +222,23 @@ structure Lexer where
   tokenStart : Position
   state : LexerState
 
-def failLexing
-    (err: LexerError)
+def failLexingAt
+    (err : LexerError)
+    (pos : Position)
     : LexerEffect a
-  := LexerEffect.mk <| .error err
+  := LexerEffect.mk <| .error (pos, err)
+
+def failLexing
+    (err : LexerError)
+    : PositionalLexerEffect a := do
+  LexerEffect.mk <| .error (<- beforeChar, err)
+
+def exceptAt
+    (exc : Except LexerError a)
+    (pos : Position)
+    : LexerEffect a := do match exc with
+  | .ok x => return x
+  | .error err => failLexingAt err pos
 
 /--
   Yields a token with span start given by the lexer and span end **exclusive** of the current position.
@@ -541,7 +548,7 @@ def Lexer.update
 def lex
     (i : EditorInfo)
     (input : String)
-    : Except LexerError (Array <| Located LexerToken) := (do
+    : Except (Position × LexerError) (Array <| Located LexerToken) := (do
   let mut pos : Position := {
     line := 0
     char := 0
@@ -553,7 +560,7 @@ def lex
     state := .indentation ""
   }
   for c in input.toList do
-    let lc <- liftLexerError <| classify c
+    let lc <- exceptAt (classify c) pos
     pos := pos.update i lc
     lexer <- lexer.update lc (prev_pos, pos)
     prev_pos := pos

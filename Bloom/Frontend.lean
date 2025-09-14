@@ -2,6 +2,7 @@
 structure Position where
   line : Nat
   char : Nat
+  deriving Repr
 
 instance : ToString Position where
   toString pos := s!"{pos.line + 1}:{pos.char + 1}"
