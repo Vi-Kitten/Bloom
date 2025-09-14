@@ -37,16 +37,25 @@ instance : HAppend Span Span Span where
     spanEnd := max sx.spanEnd sy.spanEnd
   }
 
+instance : HAppend (Option Span) (Option Span) (Option Span) where
+  hAppend ox oy := match ox, oy with
+    | .some x, .some y => .some (x ++ y)
+    | .some x, .none   => .some x
+    | .none  , .some y => .some y
+    | .none  , .none   => .none
+
 structure Located (a: Type) where
   span : Option Span
   val : a
   deriving Repr
 
+infixl:100 " @: " => Located.mk
+
 instance : Monad Located where
   pure := Located.mk .none
   bind lx f :=
     let ly := f lx.val
-    Located.mk (HAppend.hAppend <$> lx.span <*> ly.span) ly.val
+    Located.mk (lx.span ++ ly.span) ly.val
 
 structure EditorInfo where
   tabSize : Nat

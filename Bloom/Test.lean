@@ -10,5 +10,5 @@ import Bloom.Basic
   }
   match lex info text with
     | .error err => IO.println <| repr err
-    | .ok toks => for t in toks do -- Id.run <| composite toks.toList
+    | .ok toks => for t in Id.run <| composite toks.toList do
       IO.println <| repr t
