@@ -1,3 +1,5 @@
+import Bloom.Frontend
+
 -- MARK: Charecters
 
 inductive LexChar where
@@ -141,7 +143,7 @@ inductive LexerToken
   deriving Repr
 
 structure LexerEffect (a : Type) where
-  tokens: Except LexerError (Array LexerToken × a)
+  tokens: Except LexerError (Array (Located LexerToken) × a)
 
 instance : Monad LexerEffect where
   pure x := LexerEffect.mk <| return (#[], x)
@@ -150,21 +152,40 @@ instance : Monad LexerEffect where
     let (ts', y) <- (f x).tokens
     return (ts ++ ts', y)
 
+abbrev PositionalLexerEffect := ReaderT (Position × Position) LexerEffect
+
+def beforeChar : PositionalLexerEffect Position := do
+  let (before, _) <- ReaderT.read
+  return before
+
+def afterChar : PositionalLexerEffect Position := do
+  let (_, after) <- ReaderT.read
+  return after
+
 def liftLexerError (mx: Except LexerError a): LexerEffect a
   := LexerEffect.mk <| return (#[], <- mx)
 
 instance : MonadLift (Except LexerError) LexerEffect where
   monadLift := liftLexerError
 
-def failLexing
-    (err: LexerError)
-    : LexerEffect a
-  := LexerEffect.mk <| .error err
+-- MARK: Position
 
-def yieldToken
-    (tok: LexerToken)
-    : LexerEffect Unit
-  := LexerEffect.mk <| .ok (#[tok], ())
+def Position.recordCharWidth
+    (pos : Position)
+    (n : Nat)
+    : Position
+  := Position.mk pos.line (pos.char + n)
+
+def Position.update
+    (pos : Position)
+    (i : EditorInfo)
+    (c : LexChar)
+    : Position
+  := match c with
+  | .newLine => Position.mk (pos.line + 1) 0
+  | .inlineWhiteSpace '\t' => pos.recordCharWidth i.tabSize
+  | .inlineWhiteSpace '\r' => pos.recordCharWidth 0
+  | _ => pos.recordCharWidth 1
 
 -- MARK: Lexer
 
@@ -198,82 +219,135 @@ inductive LexerState
   | whiteSpace
   | waiting
 
-def LexerState.close : LexerState -> LexerEffect Unit := fun
-  | .string _ _ => failLexing .unclosedString
-  | .stringEscaped _ _ => failLexing .unclosedString
-  | .whiteSpace => yieldToken <| .whiteSpace
-  | .indentation wscs => yieldToken <| .indentation wscs
-  | .hashtag => failLexing .unexpectedEOS
-  | .hashtagVertibar => failLexing .unexpectedEOS
-  | .comment flavour com => match flavour with
-    | .regular => return ()
-    | .documentation => yieldToken <| .documentationComment com
-  | .symbolic symb => yieldToken <| .symbolic symb
-  | .snake snek => yieldToken <| .snake snek
-  | .pascal pasc => yieldToken <| .pascal pasc
-  | .number digs => yieldToken <| .natural <| Array.foldl (fun n d => 10*n + d.toNat) 0 digs
-  | .waiting => return ()
-
 inductive ContextLayer
   | openCurly
   | interpolation
 
 structure Lexer where
   context : List ContextLayer
+  tokenStart : Position
   state : LexerState
 
-def Lexer.eos (lexer : Lexer) : LexerEffect Unit := match lexer.context with
+def failLexing
+    (err: LexerError)
+    : LexerEffect a
+  := LexerEffect.mk <| .error err
+
+/--
+  Yields a token with span start given by the lexer and span end **exclusive** of the current position.
+-/
+def Lexer.yieldToken
+    (lexer : Lexer)
+    (tok : LexerToken)
+    : PositionalLexerEffect Unit := do
+  LexerEffect.mk <| .ok (#[Located.mk (Span.mk lexer.tokenStart (<- beforeChar)) tok], ())
+
+/--
+  Yields a token with span start given by the lexer and span end **includive** of the current position.
+-/
+def Lexer.yieldTokenInclusive
+    (lexer : Lexer)
+    (tok : LexerToken)
+    : PositionalLexerEffect Unit := do
+  LexerEffect.mk <| .ok (#[Located.mk (Span.mk lexer.tokenStart (<- afterChar)) tok], ())
+
+def yieldSingletonToken
+    (tok : LexerToken)
+    : PositionalLexerEffect Unit := do
+  LexerEffect.mk <| .ok (#[Located.mk (Span.mk (<- beforeChar) (<- afterChar)) tok], ())
+
+def Lexer.close (lexer : Lexer) : PositionalLexerEffect Unit := do
+  match lexer.state with
+    | .string _ _ => failLexing .unclosedString
+    | .stringEscaped _ _ => failLexing .unclosedString
+    | .whiteSpace => lexer.yieldToken <| .whiteSpace
+    | .indentation wscs => lexer.yieldToken <| .indentation wscs
+    | .hashtag => failLexing .unexpectedEOS
+    | .hashtagVertibar => failLexing .unexpectedEOS
+    | .comment flavour com => match flavour with
+      | .regular => return ()
+      | .documentation => lexer.yieldToken <| .documentationComment com
+    | .symbolic symb => lexer.yieldToken <| .symbolic symb
+    | .snake snek => lexer.yieldToken <| .snake snek
+    | .pascal pasc => lexer.yieldToken <| .pascal pasc
+    | .number digs => lexer.yieldToken <| .natural <| Array.foldl (fun n d => 10*n + d.toNat) 0 digs
+    | .waiting => return ()
+
+def Lexer.updateState
+    (lexer : Lexer)
+    : LexerState -> Lexer
+  := Lexer.mk lexer.context lexer.tokenStart
+
+/--
+  Creates a new state, **inclusive** of the charecter at the current position.
+-/
+def Lexer.newState
+    (lexer : Lexer)
+    (state : LexerState)
+    : PositionalLexerEffect Lexer := do
+  return Lexer.mk lexer.context (<- beforeChar) state
+
+/--
+  Creates a new state, **exclusive** of the charecter at the current position.
+-/
+def Lexer.newStateExclusive
+    (lexer : Lexer)
+    (state : LexerState)
+    : PositionalLexerEffect Lexer := do
+  return Lexer.mk lexer.context (<- afterChar) state
+
+def Lexer.eos (lexer : Lexer) : PositionalLexerEffect Unit := match lexer.context with
   | .openCurly :: _ => failLexing .unclosedCurly
   | .interpolation :: _ => failLexing .unclosedCurly
-  | [] => lexer.state.close
+  | [] => lexer.close
 
 -- MARK: State Machine
 
-def update
-    (c : LexChar)
+def Lexer.update
     (lexer : Lexer)
-    : LexerEffect Lexer := do match lexer.state, c with
+    (c : LexChar)
+    : PositionalLexerEffect Lexer := do match lexer.state, c with
 
   --| STRING LITERALS
   -- handle escape charecters and the start of interpolation
 
   | .stringEscaped start str, .lowercase 't' =>
-    return Lexer.mk lexer.context (.string start <| str.push '\t')
+    return lexer.updateState <| .string start <| str.push '\t'
 
   | .stringEscaped start str, .lowercase 'r' =>
-    return Lexer.mk lexer.context (.string start <| str.push '\r')
+    return lexer.updateState <| .string start <| str.push '\r'
 
   | .stringEscaped start str, .lowercase 'n' =>
-    return Lexer.mk lexer.context (.string start <| str.push '\n')
+    return lexer.updateState <| .string start <| str.push '\n'
 
   | .stringEscaped start str, .newLine =>
-    return Lexer.mk lexer.context (.string start <| str.push '\n')
+    return lexer.updateState <| .string start <| str.push '\n'
 
   | .stringEscaped start str, .backSlash =>
-    return Lexer.mk lexer.context (.string start str)
+    return lexer.updateState <| .string start str
 
   | .stringEscaped start str, .openParens =>
-    return Lexer.mk lexer.context (.string start <| str.push '{')
+    return lexer.updateState <| .string start <| str.push '{'
 
   | .stringEscaped start str, .doubleQuote =>
-    return Lexer.mk lexer.context (.string start <| str.push '"')
+    return lexer.updateState <| .string start <| str.push '"'
 
   | .stringEscaped _ _, c =>
     failLexing <| .invalidEscape c
 
   | .string start str, .backSlash =>
-    return Lexer.mk lexer.context (.stringEscaped start str)
+    return lexer.updateState (.stringEscaped start str)
 
   | .string start str, .doubleQuote =>
-    yieldToken <| start.endRegular str
-    return Lexer.mk lexer.context .waiting
+    lexer.yieldTokenInclusive <| start.endRegular str
+    lexer.newStateExclusive .waiting
 
   | .string start str, .openCurly =>
-    yieldToken <| start.endInterpolate str
-    return Lexer.mk (.interpolation :: lexer.context) .waiting
+    lexer.yieldTokenInclusive <| start.endInterpolate str
+    return Lexer.mk (.interpolation :: lexer.context) (<- afterChar) .waiting
 
   | .string start str, c =>
-    return Lexer.mk lexer.context (.stringEscaped start <| str.push c.print)
+    return lexer.updateState <| .stringEscaped start <| str.push c.print
 
   --| HASHTAG
   -- hashtag syntax finder
@@ -281,20 +355,20 @@ def update
   -- but for now this will do
 
   | .hashtag, .inlineWhiteSpace _ =>
-    return Lexer.mk lexer.context <| .comment .regular ""
+    return lexer.updateState <| .comment .regular ""
 
   | .hashtag, .openSquare =>
-    yieldToken <| .decorator
-    return Lexer.mk lexer.context .waiting
+    lexer.yieldToken <| .decorator
+    return lexer.updateState .waiting
 
   | .hashtag, .symbolic '|' =>
-    return Lexer.mk lexer.context <| .hashtagVertibar
+    return lexer.updateState <| .hashtagVertibar
 
   | .hashtag, c =>
     failLexing <| .expectedFound "whitespace, '[' or '|'" c
 
   | .hashtagVertibar, .inlineWhiteSpace ' ' =>
-    return Lexer.mk lexer.context <| .comment .documentation ""
+    return lexer.updateState <| .comment .documentation ""
 
   | .hashtagVertibar, c =>
     failLexing <| .expectedFound "' '" c
@@ -302,115 +376,115 @@ def update
   --| INDENTATION HANDLING
 
   | .indentation wscs, .inlineWhiteSpace c =>
-    return Lexer.mk lexer.context <| .indentation (wscs.push c)
+    return lexer.updateState <| .indentation (wscs.push c)
 
   --| COMMENTS
   -- single lines only
 
   | .comment flavour com, c =>
-    return Lexer.mk lexer.context <| .comment flavour (com.push c.print)
+    return lexer.updateState <| .comment flavour (com.push c.print)
 
   --| SYMBOLIC NAMES
   -- uniform requirements
   -- can touch snake and camel case
 
   | .symbolic symb, .symbolic c =>
-    return Lexer.mk lexer.context <| .symbolic (symb.push c)
+    return lexer.updateState <| .symbolic (symb.push c)
 
   | .symbolic symb, .backSlash =>
-    return Lexer.mk lexer.context <| .symbolic (symb.push '\\')
+    return lexer.updateState <| .symbolic (symb.push '\\')
 
   --| SNAKE CASE
   -- starts with lower case
   -- cant have capitals
 
   | .snake snek, .lowercase c =>
-    return Lexer.mk lexer.context <| .snake (snek.push c)
+    return lexer.updateState <| .snake (snek.push c)
 
   | .snake snek, .underscore =>
-    return Lexer.mk lexer.context <| .snake (snek.push '_')
+    return lexer.updateState <| .snake (snek.push '_')
 
   | .snake _, .uppercase _ =>
     failLexing <| .invalidSnake c
 
   | .snake snek, .digit 0 =>
-    return Lexer.mk lexer.context <| .snake (snek.push '0')
+    return lexer.updateState <| .snake (snek.push '0')
 
   | .snake snek, .digit 1 =>
-    return Lexer.mk lexer.context <| .snake (snek.push '1')
+    return lexer.updateState <| .snake (snek.push '1')
 
   | .snake snek, .digit 2 =>
-    return Lexer.mk lexer.context <| .snake (snek.push '2')
+    return lexer.updateState <| .snake (snek.push '2')
 
   | .snake snek, .digit 3 =>
-    return Lexer.mk lexer.context <| .snake (snek.push '3')
+    return lexer.updateState <| .snake (snek.push '3')
 
   | .snake snek, .digit 4 =>
-    return Lexer.mk lexer.context <| .snake (snek.push '4')
+    return lexer.updateState <| .snake (snek.push '4')
 
   | .snake snek, .digit 5 =>
-    return Lexer.mk lexer.context <| .snake (snek.push '5')
+    return lexer.updateState <| .snake (snek.push '5')
 
   | .snake snek, .digit 6 =>
-    return Lexer.mk lexer.context <| .snake (snek.push '6')
+    return lexer.updateState <| .snake (snek.push '6')
 
   | .snake snek, .digit 7 =>
-    return Lexer.mk lexer.context <| .snake (snek.push '7')
+    return lexer.updateState <| .snake (snek.push '7')
 
   | .snake snek, .digit 8 =>
-    return Lexer.mk lexer.context <| .snake (snek.push '8')
+    return lexer.updateState <| .snake (snek.push '8')
 
   | .snake snek, .digit 9 =>
-    return Lexer.mk lexer.context <| .snake (snek.push '9')
+    return lexer.updateState <| .snake (snek.push '9')
 
   --| PASCAL CASE
   -- starts with upper case
   -- cant have underscores
 
   | .pascal pasc, .lowercase c =>
-    return Lexer.mk lexer.context <| .pascal (pasc.push c)
+    return lexer.updateState <| .pascal (pasc.push c)
 
   | .pascal pasc, .uppercase c =>
-    return Lexer.mk lexer.context <| .pascal (pasc.push c)
+    return lexer.updateState <| .pascal (pasc.push c)
 
   | .pascal _, .underscore =>
     failLexing <| .invalidPascal c
 
   | .pascal pasc, .digit 0 =>
-    return Lexer.mk lexer.context <| .pascal (pasc.push '0')
+    return lexer.updateState <| .pascal (pasc.push '0')
 
   | .pascal pasc, .digit 1 =>
-    return Lexer.mk lexer.context <| .pascal (pasc.push '1')
+    return lexer.updateState <| .pascal (pasc.push '1')
 
   | .pascal pasc, .digit 2 =>
-    return Lexer.mk lexer.context <| .pascal (pasc.push '2')
+    return lexer.updateState <| .pascal (pasc.push '2')
 
   | .pascal pasc, .digit 3 =>
-    return Lexer.mk lexer.context <| .pascal (pasc.push '3')
+    return lexer.updateState <| .pascal (pasc.push '3')
 
   | .pascal pasc, .digit 4 =>
-    return Lexer.mk lexer.context <| .pascal (pasc.push '4')
+    return lexer.updateState <| .pascal (pasc.push '4')
 
   | .pascal pasc, .digit 5 =>
-    return Lexer.mk lexer.context <| .pascal (pasc.push '5')
+    return lexer.updateState <| .pascal (pasc.push '5')
 
   | .pascal pasc, .digit 6 =>
-    return Lexer.mk lexer.context <| .pascal (pasc.push '6')
+    return lexer.updateState <| .pascal (pasc.push '6')
 
   | .pascal pasc, .digit 7 =>
-    return Lexer.mk lexer.context <| .pascal (pasc.push '7')
+    return lexer.updateState <| .pascal (pasc.push '7')
 
   | .pascal pasc, .digit 8 =>
-    return Lexer.mk lexer.context <| .pascal (pasc.push '8')
+    return lexer.updateState <| .pascal (pasc.push '8')
 
   | .pascal pasc, .digit 9 =>
-    return Lexer.mk lexer.context <| .pascal (pasc.push '9')
+    return lexer.updateState <| .pascal (pasc.push '9')
 
   --| NUMBER
   -- natural number syntax
 
   | .number digits, .digit n =>
-    return Lexer.mk lexer.context <| .number (digits.push n)
+    return lexer.updateState <| .number (digits.push n)
 
   | .number _, .uppercase _ =>
     failLexing <| .invalidSnake c
@@ -419,56 +493,69 @@ def update
   -- don't track whitespace multiple times
 
   | .whiteSpace, .inlineWhiteSpace _ =>
-    return Lexer.mk lexer.context .whiteSpace
+    return lexer.updateState .whiteSpace
 
   --| DEFAULTS
 
-  | state, c =>
-    state.close
+  | _, c =>
+    lexer.close
     match c with
       --| Whitespace
-      | .inlineWhiteSpace _ => return Lexer.mk lexer.context .whiteSpace
-      | .newLine => return Lexer.mk lexer.context <| .indentation ""
+      | .inlineWhiteSpace _ => lexer.newState .whiteSpace
+      | .newLine            => lexer.newStateExclusive <| .indentation ""
 
       --| Identifiers
-      | .symbolic symb => return Lexer.mk lexer.context <| .symbolic symb.toString
-      | .backSlash => return Lexer.mk lexer.context <| .symbolic "\\"
-      | .lowercase snek => return Lexer.mk lexer.context <| .snake snek.toString
-      | .underscore => return Lexer.mk lexer.context <| .snake "_"
-      | .uppercase pasc => return Lexer.mk lexer.context <| .pascal pasc.toString
+      | .symbolic symb  => lexer.newState <| .symbolic symb.toString
+      | .backSlash      => lexer.newState <| .symbolic "\\"
+      | .lowercase snek => lexer.newState <| .snake snek.toString
+      | .underscore     => lexer.newState <| .snake "_"
+      | .uppercase pasc => lexer.newState <| .pascal pasc.toString
 
       --| Curly Brackets
-      | .openCurly => yieldToken .openCurly *> return Lexer.mk (.openCurly :: lexer.context) .waiting
+      | .openCurly => yieldSingletonToken .openCurly
+        *> return Lexer.mk (.openCurly :: lexer.context) (<- afterChar) .waiting
       | .closeCurly => match lexer.context with
-        | .openCurly :: context' => yieldToken .closeCurly *> return Lexer.mk context' .waiting
-        | .interpolation :: context' => return Lexer.mk context' <| .string .fromInterpolation ""
+        | .openCurly     :: context' => yieldSingletonToken .closeCurly
+          *> return Lexer.mk context' (<- afterChar) .waiting
+        | .interpolation :: context' =>
+          return Lexer.mk context' (<- afterChar) <| .string .fromInterpolation ""
         | [] => failLexing .unexpectedCloseCurly
 
       --| Squares and Parens
-      | .openSquare => yieldToken .openSquare *> return Lexer.mk lexer.context .waiting
-      | .closeSquare => yieldToken .closeSquare *> return Lexer.mk lexer.context .waiting
-      | .openParens => yieldToken .openParens *> return Lexer.mk lexer.context .waiting
-      | .closeParens => yieldToken .closeParens *> return Lexer.mk lexer.context .waiting
+      | .openSquare  => yieldSingletonToken .openSquare  *> lexer.newStateExclusive .waiting
+      | .closeSquare => yieldSingletonToken .closeSquare *> lexer.newStateExclusive .waiting
+      | .openParens  => yieldSingletonToken .openParens  *> lexer.newStateExclusive .waiting
+      | .closeParens => yieldSingletonToken .closeParens *> lexer.newStateExclusive .waiting
 
       --| Literals
-      | .doubleQuote => return Lexer.mk lexer.context <| .string .regular ""
-      | .digit d => return Lexer.mk lexer.context <| .number #[d]
+      | .doubleQuote => lexer.newState <| .string .regular ""
+      | .digit d     => lexer.newState <| .number #[d]
 
       --| Syntax
-      | .hashtag => return Lexer.mk lexer.context .hashtag
-      | .comma => yieldToken .comma *> return Lexer.mk lexer.context .waiting
-      | .semicolon => yieldToken .semicolon *> return Lexer.mk lexer.context .waiting
+      | .hashtag   =>                                   lexer.newState .hashtag
+      | .comma     => yieldSingletonToken .comma     *> lexer.newStateExclusive .waiting
+      | .semicolon => yieldSingletonToken .semicolon *> lexer.newStateExclusive .waiting
 
 -- MARK: Final Step
 
-def initialLexer : Lexer where
-  context := []
-  state := .indentation ""
-
-def lex (input : String) : Except LexerError (Array LexerToken) := (do
-  let mut lexer : Lexer := initialLexer
+def lex
+    (i : EditorInfo)
+    (input : String)
+    : Except LexerError (Array <| Located LexerToken) := (do
+  let mut pos : Position := {
+    line := 0
+    char := 0
+  }
+  let mut prev_pos := pos
+  let mut lexer : Lexer := {
+    context := []
+    tokenStart := pos
+    state := .indentation ""
+  }
   for c in input.toList do
     let lc <- liftLexerError <| classify c
-    lexer <- update lc lexer
-  lexer.eos
+    pos := pos.update i lc
+    lexer <- lexer.update lc (prev_pos, pos)
+    prev_pos := pos
+  lexer.eos (prev_pos, pos)
 ).tokens <&> fun (ts, _) => ts

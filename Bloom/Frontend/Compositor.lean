@@ -43,13 +43,21 @@ inductive Token
   | subDefinition -- "::"
   | comma -- ","
   | semicolon -- ";"
+  -- ref types
+  | refInout -- "&inout"
+  | refMut -- "&mut"
+  | refPin -- "&pin"
+  | ref -- "&"
   -- imports
   | modKW -- "mod"
   | pubKW -- "pub"
   | protKW -- "prot"
   | useKW -- "use"
+  | asKW -- "as"
   | allKW -- "all"
   -- modifiers
+  | moveKW
+  | inoutKW
   | mutKW
   | pinKW
   | refKW
@@ -66,6 +74,8 @@ inductive Token
   | interfaceKW
   | traitKW
   | implKW
+  | deriveKW
+  | isKW
   -- control flow
   | doKW
   | letKW
@@ -88,6 +98,12 @@ def composite : List LexerToken -> Id (List Token) := fun
   | .whiteSpace :: .symbolic "."  :: ts => .spacedDot                 :$: composite ts
   | .whiteSpace :: .openParens    :: ts => .spacedOpenParens          :$: composite ts
   | .whiteSpace :: .openSquare    :: ts => .spacedOpenSquare          :$: composite ts
+
+  | .indentation str :: .symbolic "?." :: ts => .indentation str :$: .spacedBind :$: .spacedDot :$: composite ts
+  | .indentation str :: .symbolic "?"  :: ts => .indentation str :$: .spacedBind                :$: composite ts
+  | .indentation str :: .symbolic "."  :: ts => .indentation str :$: .spacedDot                 :$: composite ts
+  | .indentation str :: .openParens    :: ts => .indentation str :$: .spacedOpenParens          :$: composite ts
+  | .indentation str :: .openSquare    :: ts => .indentation str :$: .spacedOpenSquare          :$: composite ts
 
   -- literals
 
@@ -126,12 +142,20 @@ def composite : List LexerToken -> Id (List Token) := fun
   | .comma         :: ts => .comma          :$: composite ts
   | .semicolon     :: ts => .semicolon      :$: composite ts
 
+  | .symbolic "&" :: .snake "inout" :: ts => .refInout  :$: composite ts
+  | .symbolic "&" :: .snake "mut"   :: ts => .refMut    :$: composite ts
+  | .symbolic "&" :: .snake "pin"   :: ts => .refPin    :$: composite ts
+  | .symbolic "&"                   :: ts => .ref       :$: composite ts
+
   | .snake "mod"  :: ts => .modKW  :$: composite ts
   | .snake "pub"  :: ts => .pubKW  :$: composite ts
   | .snake "prot" :: ts => .protKW :$: composite ts
   | .snake "use"  :: ts => .useKW  :$: composite ts
+  | .snake "as"   :: ts => .asKW   :$: composite ts
   | .snake "all"  :: ts => .allKW  :$: composite ts
 
+  | .snake "move"   :: ts => .moveKW   :$: composite ts
+  | .snake "inout"  :: ts => .inoutKW  :$: composite ts
   | .snake "mut"    :: ts => .mutKW    :$: composite ts
   | .snake "pin"    :: ts => .pinKW    :$: composite ts
   | .snake "ref"    :: ts => .refKW    :$: composite ts
@@ -148,6 +172,8 @@ def composite : List LexerToken -> Id (List Token) := fun
   | .snake "interface" :: ts => .interfaceKW :$: composite ts
   | .snake "trait"     :: ts => .traitKW     :$: composite ts
   | .snake "impl"      :: ts => .implKW      :$: composite ts
+  | .snake "derive"    :: ts => .deriveKW    :$: composite ts
+  | .snake "is"        :: ts => .isKW        :$: composite ts
 
   | .snake "do"    :: ts => .doKW    :$: composite ts
   | .snake "let"   :: ts => .letKW   :$: composite ts
@@ -163,16 +189,18 @@ def composite : List LexerToken -> Id (List Token) := fun
 
   | .symbolic "!."   :: ts => .reservedKeyword "!."      :$: composite ts
   | .symbolic "!"    :: ts => .reservedKeyword "!"       :$: composite ts
-  | .symbolic "&"    :: ts => .reservedKeyword "."       :$: composite ts
   | .snake "super"   :: ts => .reservedKeyword "super"   :$: composite ts
   | .pascal "Super"  :: ts => .reservedKeyword "Super"   :$: composite ts
   | .snake "inherit" :: ts => .reservedKeyword "inherit" :$: composite ts
   | .snake "class"   :: ts => .reservedKeyword "class"   :$: composite ts
+  | .snake "mixin"   :: ts => .reservedKeyword "mixin"   :$: composite ts
+  | .snake "extend"  :: ts => .reservedKeyword "extend"  :$: composite ts
   | .snake "with"    :: ts => .reservedKeyword "with"    :$: composite ts
   | .snake "open"    :: ts => .reservedKeyword "open"    :$: composite ts
   | .snake "close"   :: ts => .reservedKeyword "close"   :$: composite ts
   | .snake "fold"    :: ts => .reservedKeyword "fold"    :$: composite ts
   | .snake "weave"   :: ts => .reservedKeyword "weave"   :$: composite ts
+  | .snake "effect"  :: ts => .reservedKeyword "effect"  :$: composite ts
 
   -- unless otherwise specified these are identifiers
 

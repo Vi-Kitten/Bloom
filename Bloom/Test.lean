@@ -5,7 +5,10 @@ import Bloom.Basic
 #eval do
   let text ← readFile "./examples/math.bloom"
   IO.println text
-  match lex text with
+  let info : EditorInfo := {
+    tabSize := 4
+  }
+  match lex info text with
     | .error err => IO.println <| repr err
-    | .ok toks => for t in Id.run <| composite toks.toList do
+    | .ok toks => for t in toks do -- Id.run <| composite toks.toList
       IO.println <| repr t
