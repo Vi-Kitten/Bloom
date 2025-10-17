@@ -50,12 +50,12 @@ inductive Token
   | refPin -- "&pin"
   | ref -- "&"
   -- imports
-  | modKW -- "mod"
-  | pubKW -- "pub"
-  | protKW -- "prot"
-  | useKW -- "use"
-  | asKW -- "as"
-  | allKW -- "all"
+  | modKW
+  | pubKW
+  | protKW
+  | useKW
+  | asKW
+  | allKW
   -- modifiers
   | moveKW
   | inoutKW
@@ -69,6 +69,12 @@ inductive Token
   | newKW
   | fnKW
   | underscoreKW
+  -- typedefs
+  | typeKW
+  | structKW
+  | enumKW
+  | inKW
+  | outKW
   -- interfaces and traits
   | selfKW
   | selfTypeKW -- "Self"
@@ -81,13 +87,19 @@ inductive Token
   | doKW
   | letKW
   | forKW
-  | inKW
+  | endKW
   | loopKW
   | matchKW
   | ifKW
   | thenKW
   | elseKW
-  deriving Repr
+  | returnKW
+  | yieldKW
+  | tryKW
+  | catchKW
+  | finallyKW
+  | throwKW
+  deriving Repr, BEq
 
 def composite : List (Located LexerToken) -> Id (List <| Located Token) := fun
 
@@ -168,6 +180,12 @@ def composite : List (Located LexerToken) -> Id (List <| Located Token) := fun
   | x @: .snake "fn"    :: ts => x @: .fnKW         :$: composite ts
   | x @: .snake "_"     :: ts => x @: .underscoreKW :$: composite ts
 
+  | x @: .snake "type"   :: ts => x @: .typeKW   :$: composite ts
+  | x @: .snake "struct" :: ts => x @: .structKW :$: composite ts
+  | x @: .snake "enum"   :: ts => x @: .enumKW   :$: composite ts
+  | x @: .snake "in"     :: ts => x @: .inKW     :$: composite ts
+  | x @: .snake "out"    :: ts => x @: .outKW    :$: composite ts
+
   | x @: .snake "self"      :: ts => x @: .selfKW      :$: composite ts
   | x @: .pascal "Self"     :: ts => x @: .selfTypeKW  :$: composite ts
   | x @: .snake "interface" :: ts => x @: .interfaceKW :$: composite ts
@@ -176,16 +194,22 @@ def composite : List (Located LexerToken) -> Id (List <| Located Token) := fun
   | x @: .snake "derive"    :: ts => x @: .deriveKW    :$: composite ts
   | x @: .snake "is"        :: ts => x @: .isKW        :$: composite ts
 
-  | x @: .snake "do"    :: ts => x @: .doKW                  :$: composite ts
-  | x @: .snake "let"   :: ts => x @: .letKW                 :$: composite ts
-  | x @: .snake "for"   :: ts => x @: .forKW                 :$: composite ts
-  | x @: .snake "in"    :: ts => x @: .inKW                  :$: composite ts
-  | x @: .snake "loop"  :: ts => x @: .loopKW                :$: composite ts
-  | x @: .snake "match" :: ts => x @: .matchKW               :$: composite ts
-  | x @: .snake "if"    :: ts => x @: .ifKW                  :$: composite ts
-  | x @: .snake "then"  :: ts => x @: .thenKW                :$: composite ts
-  | x @: .snake "else"  :: ts => x @: .elseKW                :$: composite ts
-  | x @: .snake "elif"  :: ts => x @: .elseKW :$: x @: .ifKW :$: composite ts
+  | x @: .snake "do"      :: ts => x @: .doKW                  :$: composite ts
+  | x @: .snake "let"     :: ts => x @: .letKW                 :$: composite ts
+  | x @: .snake "for"     :: ts => x @: .forKW                 :$: composite ts
+  | x @: .snake "end"     :: ts => x @: .endKW                 :$: composite ts
+  | x @: .snake "loop"    :: ts => x @: .loopKW                :$: composite ts
+  | x @: .snake "match"   :: ts => x @: .matchKW               :$: composite ts
+  | x @: .snake "if"      :: ts => x @: .ifKW                  :$: composite ts
+  | x @: .snake "then"    :: ts => x @: .thenKW                :$: composite ts
+  | x @: .snake "else"    :: ts => x @: .elseKW                :$: composite ts
+  | x @: .snake "elif"    :: ts => x @: .elseKW :$: x @: .ifKW :$: composite ts
+  | x @: .snake "return"  :: ts => x @: .returnKW              :$: composite ts
+  | x @: .snake "yield"   :: ts => x @: .yieldKW               :$: composite ts
+  | x @: .snake "try"     :: ts => x @: .tryKW                 :$: composite ts
+  | x @: .snake "catch"   :: ts => x @: .catchKW               :$: composite ts
+  | x @: .snake "finally" :: ts => x @: .finallyKW             :$: composite ts
+  | x @: .snake "throw"   :: ts => x @: .throwKW               :$: composite ts
 
   -- reservation
 
@@ -203,6 +227,8 @@ def composite : List (Located LexerToken) -> Id (List <| Located Token) := fun
   | x @: .snake "fold"    :: ts => x @: .reservedKeyword "fold"    :$: composite ts
   | x @: .snake "weave"   :: ts => x @: .reservedKeyword "weave"   :$: composite ts
   | x @: .snake "effect"  :: ts => x @: .reservedKeyword "effect"  :$: composite ts
+  | x @: .snake "async"   :: ts => x @: .reservedKeyword "async"   :$: composite ts
+  | x @: .snake "await"   :: ts => x @: .reservedKeyword "await"   :$: composite ts
 
   -- unless otherwise specified these are identifiers
 

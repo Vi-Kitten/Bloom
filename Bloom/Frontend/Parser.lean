@@ -1,5 +1,7 @@
 import Bloom.Basic
 
+-- MARK: Parser
+
 /--
   Parses some number of tokens `t` within the input stream to produce a result.
   The process of taking in the input stream and producing a result
@@ -42,9 +44,9 @@ def ParserT.catchAdapt [Monad m]
 
 infixl:20 " <?> " => ParserT.catchAdapt
 
-infixl:20 " ?> " => fun mx e => mx <?> fun _ => throw e
+infixl:20 " ?> " => fun mx err => mx <?> fun _ => throw err
 
-infixr:20 " <? " => fun e mx => mx <?> fun _ => throw e
+infixr:20 " <? " => fun err mx => mx <?> fun _ => throw err
 
 instance [Monad m] : MonadExcept e (ParserT t e m) where
   throw e := fun _ => throw e
@@ -61,7 +63,6 @@ def ParserT.run [Monad m] (mx : ParserT t e m a) (arr : Array t):
 /--
   Backtrack on success.
 -/
-
 def ParserT.scry [Monad m] (mx : ParserT t e m a): ParserT t e m a :=
   fun arr => mx arr <&> fun (x, _) => (x, 0)
 
@@ -124,12 +125,19 @@ def any [Monad m]
   - Errors `onEntry` signify that the parsed tokens were not unique to the branch.
   - Errors `afterEntered` signify that the parsed tokens can only belong to the branch.
 -/
-inductive BranchErr (EntryErr EnteredErr : Type) where
-  | onEntry : EntryErr -> BranchErr EntryErr EnteredErr
-  | afterEntered : EnteredErr -> BranchErr EntryErr EnteredErr
+inductive BranchErr (entry_err entered_err : Type) where
+  | onEntry : entry_err -> BranchErr entry_err entered_err
+  | afterEntered : entered_err -> BranchErr entry_err entered_err
 
 /--
-  Makes the branch expect the parser as part of entry.
+  Makes the entering portion of a branch, should be used before any `require` for example:
+  ```lean4
+  do
+    let _ <- some_parser.expect
+    ...
+    return require do
+      ...
+  ```
 -/
 def ParserT.expect [Monad m]
     (mx: ParserT t e m a)
@@ -137,7 +145,7 @@ def ParserT.expect [Monad m]
   := mx.adapt .onEntry
 
 /--
-  Marks the entry of a branch, should only be used after a `return`, for example:
+  Marks the post-entry postion of a branch, will usually be written after a `return`, for example:
   ```lean4
   do
     let _ <- some_parser.expect
@@ -154,14 +162,17 @@ def require [Monad m]
 /--
   The error type of a parser mid-branching.
 -/
-inductive BranchingErr (EntryErr EnteredErr : Type) where
-  | selectionFailures : PopulatedList EntryErr -> BranchingErr EntryErr EnteredErr
-  | canonicalFailure : EnteredErr -> BranchingErr EntryErr EnteredErr
+inductive BranchingErr (entry_err entered_err : Type) where
+  | selectionFailures : PopulatedList entry_err -> BranchingErr entry_err entered_err
+  | canonicalFailure : entered_err -> BranchingErr entry_err entered_err
 
 class DefaultErr (e : Type) where
   silent : e
 
-instance : Coe (BranchErr EntryErr EnteredErr) (BranchingErr EntryErr EnteredErr) where
+instance : DefaultErr Unit where
+  silent := ()
+
+instance : Coe (BranchErr entry_err entered_err) (BranchingErr entry_err entered_err) where
   coe
   | .onEntry err => .selectionFailures <| err ::| []
   | .afterEntered err => .canonicalFailure err
@@ -171,9 +182,9 @@ instance : Coe (BranchErr EntryErr EnteredErr) (BranchingErr EntryErr EnteredErr
   otherwise all `.selectionFailures` are tracked.
 -/
 def split [Monad m]
-    (mx : ParserT t (BranchingErr EntryErr EnteredErr) m a)
-    (my : ParserT t (BranchingErr EntryErr EnteredErr) m a)
-    : ParserT t (BranchingErr EntryErr EnteredErr) m a :=
+    (mx : ParserT t (BranchingErr entry_err entered_err) m a)
+    (my : ParserT t (BranchingErr entry_err entered_err) m a)
+    : ParserT t (BranchingErr entry_err entered_err) m a :=
   try mx catch
   | .selectionFailures errs =>
     try my catch
@@ -212,8 +223,20 @@ def ParserT.recover [Monad m]
     (mx : ParserT t e m a)
     : ParserT t e' m (Except e a)
   := mx
-    <&> (.ok)
+    <&> .ok
     <?> fun err => return .error err
+
+/--
+  Recoveres only errors on parse branch entry, storing the error. deep errors are rethrown.
+-/
+def ParserT.recoverEntry [Monad m]
+    (mx : ParserT t (BranchErr entry_err entered_err) m a)
+    : ParserT t entered_err m (Except entry_err a)
+  := mx
+    <&> .ok
+    <?> fun
+      | .onEntry err => return .error err
+      | .afterEntered err => throw err
 
 /--
   **Always** succeeds returning some parsed value if present or nothing if there was an error.
@@ -222,8 +245,20 @@ def ParserT.opt [Monad m]
     (mx : ParserT t e m a)
     : ParserT t e' m (Option a)
   := mx
-    <&> (.some)
+    <&> .some
     <?> fun _ => return .none
+
+/--
+  Recoveres only errors on parse branch entry, returning nothing if so. deep errors are rethrown.
+-/
+def ParserT.optEntry [Monad m]
+    (mx : ParserT t (BranchErr entry_err entered_err) m a)
+    : ParserT t entered_err m (Option a)
+  := mx
+    <&> .some
+    <?> fun
+      | .onEntry _ => return .none
+      | .afterEntered err => throw err
 
 /--
   Bundles multiple recovered errors together ready to be composed and thrown.
@@ -274,10 +309,33 @@ unsafe def ParserT.most [Monad m]
     <?> fun _ => return []
 
 /--
+  Repeatedly parses a non-zero amount of items.
+-/
+unsafe def ParserT.some [Monad m]
+    (mx : ParserT t e m a)
+    : ParserT t e m (PopulatedList a)
+  := PopulatedList.mk <$> mx <*> mx.most
+
+/--
+  Alternate between the original term and the gap term.
+  Will only provide the error of the original term.
+-/
+unsafe def ParserT.alternate [Monad m]
+    (mx : ParserT t e m a)
+    (my : ParserT t e' m b)
+    : ParserT t e m (AlternatingList b a) := do
+  let x <- mx
+  match <- my.opt with
+    | .none => return .wrap x
+    | .some y => do
+      let xys <- mx.alternate my
+      return x ::< y >:: xys
+
+/--
   Parses the least amount of the original term until the specified end.
   Will only provide the error of the expected end.
 -/
-unsafe def ParserT.least_until [Monad m]
+unsafe def ParserT.leastUntil [Monad m]
     (mx : ParserT t e m a)
     (my : ParserT t e' m b)
     : (ParserT t e' m (List a × b))
@@ -285,5 +343,5 @@ unsafe def ParserT.least_until [Monad m]
     <&> (fun y => ([], y))
     <?> fun err => do
       let x <- mx ?> err
-      let (xs, y) <- mx.least_until my
+      let (xs, y) <- mx.leastUntil my
       return (x :: xs, y)
