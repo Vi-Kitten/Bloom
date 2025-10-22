@@ -7,6 +7,13 @@ module Parser.Combinators (
     associateLeft,
     associateRight,
     (+-),
+    expectPred,
+    expectPredSpanned,
+    expectEqual,
+    expectEqualSpanned,
+    expectNotequal,
+    expectNotequalSpanned,
+    expectAny,
     opt,
     leastUntil',
     leastUntil,
@@ -25,8 +32,9 @@ module Parser.Combinators (
 import Data.Bifunctor (Bifunctor (..))
 import Data.Functor ((<&>))
 import Data.List.NonEmpty (NonEmpty (..))
-import Parser (ParserT)
+import Parser (ParserT, expect)
 import Control.Applicative (Alternative(..))
+import Parser.Spanned (Spanned(..))
 
 infixr 5 :+
 
@@ -82,6 +90,39 @@ instance Applicative (AlternatingList s) where
 
 instance Monad (AlternatingList s) where
     (>>=) = bindAlternatingList
+
+expectPred :: (a -> Bool) -> ParserT a () m a
+expectPred p = expect $ \c -> if p c
+    then Right c
+    else Left ()
+
+expectPredSpanned :: (a -> Bool) -> ParserT (Spanned a) () m (Spanned a)
+expectPredSpanned p = expect $ \(s :@ c) -> if p c
+    then Right $ s :@ c
+    else Left ()
+
+expectEqual :: Eq a => a -> ParserT a () m a
+expectEqual c = expect $ \c' -> if c == c'
+    then Right c'
+    else Left ()
+
+expectEqualSpanned :: Eq a => a -> ParserT (Spanned a) () m (Spanned a)
+expectEqualSpanned c = expect $ \(s :@ c') -> if c == c'
+    then Right $ s :@ c'
+    else Left ()
+
+expectNotequal :: Eq a => a -> ParserT a () m a
+expectNotequal c = expect $ \c' -> if c /= c'
+    then Right c'
+    else Left ()
+
+expectNotequalSpanned :: Eq a => a -> ParserT (Spanned a) () m (Spanned a)
+expectNotequalSpanned c = expect $ \(s :@ c') -> if c /= c'
+    then Right $ s :@ c'
+    else Left ()
+
+expectAny :: ParserT t e m t
+expectAny = expect Right
 
 opt :: Functor m => ParserT t e m a -> ParserT t e m (Maybe a)
 opt px = (px <&> Just) <|> pure Nothing
