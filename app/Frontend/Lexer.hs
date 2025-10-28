@@ -22,7 +22,7 @@ import Data.Functor ((<&>), ($>))
 import Parser.Combinators (expectEqualSpanned, expectNotequalSpanned, expectPredSpanned)
 import Control.Monad (join)
 import Data.Maybe (maybeToList)
-import Data.Bifunctor (Bifunctor(..))
+import Data.Bifunctor (Bifunctor (..))
 
 symbolicCharecters :: Set Char
 symbolicCharecters = fromList "!$%^&*-+=:@~|<>?./"
@@ -344,11 +344,14 @@ snakeKeyWords = fromList [
         "pin",
         "ref",
     -- general
-        "_",
+        "_", -- discard
         "def",
         "where",
         "for",
         "dyn",
+        "in",
+        "out",
+        "todo", -- leave undefined
     -- datatypes
         "enum",
         "case",
@@ -366,7 +369,6 @@ snakeKeyWords = fromList [
         "do",
         "with",
         "or",
-        "in",
         "match",
         "fold",
         "switch",
@@ -380,7 +382,9 @@ snakeKeyWords = fromList [
         "extend",
         "open",
         "close",
-        "effect"
+        "effect",
+        "test",
+        "defer"
     ]
 
 symbolicKeyWords :: Set String
@@ -401,13 +405,17 @@ symbolicKeyWords = fromList [
         ":",
         "::",
         "&",
+        "...", -- typed hole
     -- reservations
-        "@"
+        "<-",
+        "@",
+        "<:" -- subtyping
     ]
 
 decoratorKeyWords :: Set String
 decoratorKeyWords = fromList [
-        "unit" -- for units on numbers, such as in `3 + 4i`
+        "unit", -- for units on numbers, such as in `3 + 4i`
+        "assign" -- could be a neat way to assign `todo` things to certain groups / people
     ]
 
 composite :: [Spanned RawToken] -> [Spanned Token]
@@ -417,6 +425,9 @@ composite (s :@ RawNatural n   : s' :@ RawSnakeName unit : toks) = (s <> s') :@ 
 composite (s :@ DecoratorStart : s' :@ RawSnakeName name : toks) = if decoratorKeyWords & member name
     then (s <> s') :@ Decorator name      : composite toks
     else (s <> s') :@ ErroniousOpenSquare : composite toks
+composite (s :@ DecoratorStart : s' :@ WhiteSpace : s'' :@ RawSnakeName name : toks) = if decoratorKeyWords & member name
+    then (s <> s' <> s'') :@ Decorator name      : composite toks
+    else (s <> s' <> s'') :@ ErroniousOpenSquare : composite toks
 -- spliting
 composite (s :@ RawSnakeName "elif"  : toks) = s :@ Keyword "else" : s :@ Keyword "if" : composite toks
 composite (s :@ RawSymbolicName "?." : toks) = s :@ Keyword "?"    : s :@ Keyword "."  : composite toks
