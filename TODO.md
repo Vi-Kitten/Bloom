@@ -1,1 +1,0 @@
-- Implement the `LexerError` and `Expectation` error types in `Frontend.Lexer`

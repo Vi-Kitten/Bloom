@@ -343,6 +343,7 @@ snakeKeyWords = fromList [
         "mut",
         "pin",
         "ref",
+        "pure",
     -- general
         "_", -- discard
         "def",
@@ -384,7 +385,8 @@ snakeKeyWords = fromList [
         "close",
         "effect",
         "test",
-        "defer"
+        "defer",
+        "modality"
     ]
 
 symbolicKeyWords :: Set String
@@ -409,7 +411,8 @@ symbolicKeyWords = fromList [
     -- reservations
         "<-",
         "@",
-        "<:" -- subtyping
+        "<:", -- subtyping
+        "|=" -- implicit tuple (dual to =>) for example: dyn[N] Num N |= N
     ]
 
 decoratorKeyWords :: Set String

@@ -1,12 +1,5 @@
 {-# LANGUAGE TupleSections #-}
 module Parser.Combinators (
-    AlternatingListSep (..),
-    AlternatingList (..),
-    associateLeft',
-    associateRight',
-    associateLeft,
-    associateRight,
-    (+-),
     expectPred,
     expectPredSpanned,
     expectEqual,
@@ -29,67 +22,12 @@ module Parser.Combinators (
     mostAlt
 ) where
 
-import Data.Bifunctor (Bifunctor (..))
 import Data.Functor ((<&>))
 import Data.List.NonEmpty (NonEmpty (..))
 import Parser (ParserT, expect)
-import Control.Applicative (Alternative(..))
-import Parser.Spanned (Spanned(..))
-
-infixr 5 :+
-
-data AlternatingListSep s a = (:+) s (AlternatingList s a)
-
-infixr 5 :-
-
-data AlternatingList s a
-    = End a
-    | (:-) a (AlternatingListSep s a)
-
-infixr 4 +-
-
-(+-) :: AlternatingList s a -> AlternatingListSep s a -> AlternatingList s a
-End x         +- yxs = x :- yxs
-x :- y :+ xys +- yxs = x :- y :+ (xys +- yxs)
-
-bindAlternatingList :: AlternatingList s a -> (a -> AlternatingList s b) -> AlternatingList s b
-bindAlternatingList (End x)         f = f x
-bindAlternatingList (x :- y :+ xys) f = f x +- y :+ bindAlternatingList xys f
-
-associateLeft' :: (a -> b) -> (s -> a -> b -> b) -> AlternatingList s a -> b
-associateLeft' rgh _           (End a) = rgh a
-associateLeft' rgh sep (x :- y :+ xys) = sep y x (associateLeft' rgh sep xys)
-
-associateRight' :: (a -> b) -> (s -> b -> a -> b) -> AlternatingList s a -> b
-associateRight' lft _           (End a) = lft a
-associateRight' lft sep (x :- y :+ xys) = associateRight' (sep y (lft x)) sep xys
-
-associateLeft :: (s -> a -> a -> a) -> AlternatingList s a -> a
-associateLeft = associateLeft' id
-
-associateRight :: (s -> a -> a -> a) -> AlternatingList s a -> a
-associateRight = associateRight' id
-
-instance Functor (AlternatingListSep s) where
-    fmap f (y :+ xys) = y :+ fmap f xys
-
-instance Functor (AlternatingList s) where
-    fmap f (x :- yxs) = f x :- fmap f yxs
-    fmap f (End x)    = End $ f x
-
-instance Bifunctor AlternatingListSep where
-    bimap f g (y :+ xys) = f y :+ bimap f g xys
-
-instance Bifunctor AlternatingList where
-    bimap f g (x :- yxs) = g x :- bimap f g yxs
-    bimap _ g (End x)    = End $ g x
-
-instance Applicative (AlternatingList s) where
-    pure = End
-    fys <*> xys = bindAlternatingList fys $ \f -> xys <&> f 
-
-instance Monad (AlternatingList s) where
-    (>>=) = bindAlternatingList
+import Control.Applicative (Alternative (..))
+import Parser.Spanned (Spanned (..))
+import Utils(AlternatingList (..), AlternatingListSep (..))    
 
 expectPred :: (a -> Bool) -> ParserT a () m a
 expectPred p = expect $ \c -> if p c
