@@ -34,18 +34,6 @@ data Introduction m k
     }
     | Contradictory Contradiciton
 
-instance Semigroup k => Semigroup (Introduction m k) where
-    i <> i' = Introduction {
-        implication = ((<>) `on` implication) i i',
-        constriants = ((<>) `on` constriants) i i'
-    }
-
-instance Monoid k => Monoid (Introduction m k) where
-    mempty = Introduction {
-        implication = mempty,
-        constriants = mempty
-    }
-
 data Constraint m k = Constraint {
     -- | Ways we can reduce the constraint, if solving is successful.
     reductions :: NonEmpty (Reduction m k)

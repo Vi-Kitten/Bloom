@@ -18,8 +18,8 @@ data BloomKind
 
 data FundimentalType
     = Unit
-    | Void -- for[a] a
-    | Full -- dyn[a] a
+    | Empty -- for[a] a
+    | Any -- dyn[a] a
     | Fn -- (->)
     | FnMut -- (~>)
     | FnOnce -- (-+)

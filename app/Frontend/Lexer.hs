@@ -369,13 +369,22 @@ snakeKeyWords = fromList [
         "let",
         "do",
         "with",
-        "or",
         "match",
         "fold",
+        "goto",
         "switch",
         "if",
         "else",
+        "elif",
         "fn",
+        "return",
+        "yield",
+        "break",
+        "continue",
+        "pass",
+        "throw",
+        "try",
+        "catch",
     -- reservations
         "class",
         "inherit",
@@ -386,7 +395,8 @@ snakeKeyWords = fromList [
         "effect",
         "test",
         "defer",
-        "modality"
+        "modality",
+        "or"
     ]
 
 symbolicKeyWords :: Set String
@@ -432,7 +442,7 @@ composite (s :@ DecoratorStart : s' :@ WhiteSpace : s'' :@ RawSnakeName name : t
     then (s <> s' <> s'') :@ Decorator name      : composite toks
     else (s <> s' <> s'') :@ ErroniousOpenSquare : composite toks
 -- spliting
-composite (s :@ RawSnakeName "elif"  : toks) = s :@ Keyword "else" : s :@ Keyword "if" : composite toks
+-- composite (s :@ RawSnakeName "elif"  : toks) = s :@ Keyword "else" : s :@ Keyword "if" : composite toks
 composite (s :@ RawSymbolicName "?." : toks) = s :@ Keyword "?"    : s :@ Keyword "."  : composite toks
 -- errors
 composite (s :@ DecoratorStart : toks) = s :@ ErroniousOpenSquare : composite toks
