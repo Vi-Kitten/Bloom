@@ -370,6 +370,7 @@ snakeKeyWords = fromList [
         "do",
         "with",
         "match",
+        "or",
         "fold",
         "goto",
         "switch",
@@ -394,9 +395,14 @@ snakeKeyWords = fromList [
         "close",
         "effect",
         "test",
+        "axiom",
+        "rule",
         "defer",
         "modality",
-        "or"
+        "async",
+        "await",
+        "spawn",
+        "par" -- linear dual of tuple for async environments
     ]
 
 symbolicKeyWords :: Set String
@@ -417,12 +423,13 @@ symbolicKeyWords = fromList [
         ":",
         "::",
         "&",
+        "@", -- jump label
         "...", -- typed hole
     -- reservations
         "<-",
-        "@",
         "<:", -- subtyping
-        "|=" -- implicit tuple (dual to =>) for example: dyn[N] Num N |= N
+        "|=", -- implicit tuple (dual to =>) for example: dyn[N] Num N |= N
+        "~" -- linear consumer type, like T -* Unit for async environments
     ]
 
 decoratorKeyWords :: Set String

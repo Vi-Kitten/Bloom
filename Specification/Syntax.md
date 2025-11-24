@@ -35,7 +35,7 @@ A special case is made for `?.` which gets processed into `?` and `.` so that yo
 
 Natural numbers consist of a sequence of simple digits, if this sequence of single digits is followed by a snake case name without space then that name is interpreted as a *unit*.
 
-Strings are broken up into four toke types:
+Strings are broken up into four token types:
 - Small string `"non-interpolated"`
 - String start `"interpolation-start{`
 - String middle `}interpolation-continue{`
@@ -108,9 +108,7 @@ Syntax that is shared between different areas.
 
 ### Patterns
 
-The parser `<total-pattern>` is the same as `<pattern>`, but signifies that the parsed pattern should be total. It has no grammar significance, just semantic significance.
-
-Same with `<compact-total-pattern>` and `<compact-pattern>`.
+Fundimental to the handling of data with disjoint cases.
 
 ```bnf
 <record-match> ::=
@@ -127,24 +125,42 @@ Same with `<compact-total-pattern>` and `<compact-pattern>`.
 <tuple-pattern> ::=
     <curry-pattern> ("," <curry-pattern>)*
 
-<pattern> ::=
+<symbolic-pattern> ::=
     <tuple-pattern> (<symbolic-name> <tuple-pattern>)*
+
+<with-block> ::=
+    "with" <open> (<item> <snake-name> "=" <expr>)* <close>
+
+<pattern> ::=
+    <symboic-pattern> <with-block>? ("or" <symbolic-pattern> <with-block>?)*
 
 <multi-pattern> ::=
     <pattern> (";" <pattern>)*
+```
+
+```ocaml
+let Both x y
+    or Left x with { y = 123 }
+    or Right y with { x = "abc" }
+    = ...
 ```
 
 ### Argument Handling
 
 ```bnf
 <arg> ::=
-    <total-pattern> <typed>?
+    <curry-pattern> <typed>?
 
 <tuple-args> ::=
     <arg> ("," <arg>)*
 
 <curry-args> ::=
-    <tuple-args>? (";" <tuple-args>?)*
+    <tuple-args> (";" <tuple-args>)*
+```
+
+```py
+def func(x, y; z)
+    = (x * y) + z
 ```
 
 ### Map and Gaurd Syntax
@@ -159,13 +175,24 @@ Anywhere where you could write `x y =>`, you may also use certain syntax extensi
     ("|" <multi-pattern>)+ "=>" <action>
 
 <map> ::=
-    <compact-total-pattern> "=>" <action>
+    <compact-pattern> "=>" <action>
     | <gaurd>*
 
 <multi-map> ::=
-    <compact-total-pattern>+ "=>" <action>
+    <compact-pattern>+ "=>" <action>
     | <multi-gaurd>*
 ```
+
+### Labels
+
+Places that can be jumped to.
+
+```bnf
+<label> ::=
+    "@" <snake-name>
+```
+
+Very simple, but very important.
 
 ## Expressions
 
@@ -202,7 +229,7 @@ A chain is a series of member accesses and method calls, the keyword ";" is used
 
 A functional, lambda calculus inspired syntax for function application.
 
-Certain function flavoured keywords live here.
+The keywords `fold` and `yield` exist here as they produce values and as such are treated like special functions.
 
 ```bnf
 <curry-expr> ::=
@@ -236,19 +263,27 @@ Operators in symbolic expressions (specifically those at the start and end) may 
 Finally we have control flow, which wraps everything else providing structure to the expression.
 The keyword `$` creates a fold right chain of sub-expressions which can help reduce cluttered parenthesis.
 
+We seperate control flow into the simple flow and inductive flow, which represent constructs that cannot and can be labelled respectively.
+
 ```bnf
-<control-flow> ::=
+<simple-flow> ::=
     <lambda>
     | <if-else>
-    | <for-in>
-    | <match-with>
     | <switch-with>
     | <try-catch>
+
+<indutive-flow> ::=
+    <for-in>
+    | <match-with>
+
+<control-flow> ::=
+    <simple-flow>
+    | <label>? <indutive-flow>
 
 <expr> ::=
     <symbolic-expr> (<control-flow> | "$" <expr>)?
 
-<exit-flow> ::=
+<jump> ::=
     <break>
     | <continue>
     | <goto>
@@ -257,13 +292,20 @@ The keyword `$` creates a fold right chain of sub-expressions which can help red
 
 <do-action> ::=
     "do" <expr>
-    | <exit-flow>
+    | <jump>
     | "pass"
 
 <action> ::=
     <expr>
-    | <exit-flow>
+    | <jump>
     | "pass"
+```
+
+Jump statements are those that, canonically, evaluate to `Empty`. It only makes sense to place them at the start of a unique branch, because of this we can be more erganomical with our syntax, allowing these statements to be placed without predecing spacing keywords:
+
+```py
+if list.pop is Some x
+    return x
 ```
 
 ### Control Flow
@@ -307,13 +349,13 @@ For iterates over a collection allowing you to `break` the loop prematurely, oth
 
 ```bnf
 <for-in> ::=
-    "for" <total-pattern> "in" <expr> <do-action> ("end" <action>)?
+    "for" <pattern> "in" <expr> <do-action> ("end" <action>)?
 
 <break> ::=
-    "break" <expr>
+    "break" <label>? <expr>?
 
 <continue> ::=
-    "continue"
+    "continue" <label>?
 ```
 
 ```rb
@@ -340,7 +382,7 @@ Match is a more general purpose version of `if`. The first branch with pattern m
     "match" <expr> (";" <expr>)* "with" <multi-gaurd>*
     
 <fold> ::=
-    "fold" <chain-expr>+
+    "fold" <label>? <chain-expr>+
 ```
 
 ```ocaml
@@ -357,26 +399,31 @@ Switch is a variant of `match`. It exists to handle more complicated control flo
 You can use `goto` when inside the expression the `switch` is matching on to route to the end of the expression and immdiately start branching!
 
 ```bnf
+<label-case> ::=
+    <label> <compact-pattern>* <with-block>? ("or" <compact-pattern>* <with-block>?)* "=>" <action>
+
 <switch-with> ::=
-    "switch" <expr> (";" <expr>)* "with" <multi-gaurd>*
+    "switch" <label> <chain-expr>* "with" <label-case>*
     
 <goto> ::=
-    "goto" <pascal-case> <chain-expr>*
+    "goto" <label> <chain-expr>*
     
 ```
 
-```C
-switch Normal $ non_zero {
-    if test1 n
-        goto Foo n
-    if test2 n
-        goto Bar
-    n-1
-} with
-    | Foo n => ...
-    | Bar   => ...
-    | Normal (Some n) => ...
-    | Normal None     => ...
+```c
+if obj.is_red
+    goto @foo 1
+
+if obj.is_green
+    goto @default
+
+if obj.is_blue
+    goto @bar 2 3
+
+switch @default with
+    @foo x   => ...
+    @bar y z => ...
+    @default => ...
 ```
 
 #### Return
@@ -440,37 +487,62 @@ for x in xs do
 Blocks are how we start doing imperative logic.
 
 ```bnf
-<flow-stmt> ::=
+<simple-flow-stmt> ::=
     <if-else-stmt>
-    | <for-in-stmt>
-    | <match-with-stmt>
     | <switch-with-stmt>
     | <try-catch-stmt>
+
+<inductive-flow-stmt> ::=
+    <for-in-stmt>
+    | <match-with-stmt>
+
+<flow-stmt> ::=
+    <simple-flow-stmt>
+    | <label>? <inductive-flow-stmt>
 
 <block-stmt> ::=
     <let-stmt>
     | <flow-stmt>
     | <action>
     
-<block-cont> ::=
-    <block-stmt>
-    | <flow-cont>
-    
 <block> ::=
-    <open> (<item> <block-cont> | <close>)
+    <open> (<item> <block-stmt>)* <close>
+```
+
+```rs
+{
+    let xy |: xys = xys
+    let mut xs = []
+    let mut ys = []
+    xys.iter fn
+        | Both x y => {
+            xs.push x
+            ys.push y
+        }
+        | Left x => xs.push x
+        | Right y => ys.push y
+    match xy with
+        | Both x y = Both (x |: xs) (y |: ys)
+        | Left x = if ys.as_nonempty is Some ys
+            do Both (x |: xs) ys
+            else Left (x |: xs)
+        | Right y = if xs.as_nonempty is Some xs
+            do Both xs (y |: ys)
+            else Right (y |: ys)
+}
 ```
 
 ### Statement Control Flow
 
-If each `<item>` token in a block had to precisely correspond to a new statement then we would not be able to do the following:
+By leveraging `<item"else">` and other tokens we can parse the following syntax:
 
 ```py
-if cond_0 do
-    yield 0
-elif cond_1 do
-    yield 1
-else
+if cond_0
+    return 0
+elif cond_1
     pass
+else
+    return 1
 ```
 
 ```bnf
@@ -491,7 +563,7 @@ else
     )?
 
 <for-in-stmt> ::=
-    "for" <total-pattern> "in" <expr> <do-action> (
+    "for" <pattern> "in" <expr> <do-action> (
         "end" <action>
         | <item"end"> <action>
     )?
@@ -503,9 +575,9 @@ else
     )
 
 <switch-with-stmt> ::=
-    "match" <expr> (";" <expr>)* (
-        "with" <multi-gaurd>*
-        | <item"with"> <multi-gaurd>*
+    "switch" <expr> (
+        "with" <label-case>*
+        | <item"with"> <label-case>*
     )
 
 <try-catch-stmt> ::=
@@ -521,7 +593,7 @@ Let statements instantiate variables from a total pattern using an expression. T
 
 ```bnf
 <let-stmt> ::=
-    "let" <total-pattern> <typed>? "=" <expr>
+    "let" <pattern> <typed>? "=" <expr>
 ```
 
 ```rs
@@ -541,13 +613,17 @@ struct FooBar {
     .foo: Foo
     .bar: Bar
 }
+
 # record syntax
+
 new FooBar {
     .foo = x
     .bar = y
 }
+
 # function syntax
-FooBar::new x y
+
+FooBar x y
 ```
 
 ### Enums
@@ -556,14 +632,27 @@ Enum `case`s are built in the same way as `struct`s.
 
 ```C
 enum Thingy {
-    case Foo (x: Int) (y: Int)
-    case Bar Int {
+    case Foo Int Int
+    case Bar {
         .attr: Nat = 0
         .other_attr: Nat
     }
 }
 
-new Thingy::Foo 0 1
+Thingy::Foo 0 1
+```
+
+### Inductives
+
+General inductive types are like supercharged enums, allowing you to create much more complicated type level programs whilst still respecting parametric polymorphism.
+
+```rb
+inductive Expr[out type] {
+    case[Int] FromInt Int
+    case[Bool] FromBool Bool
+    case[Int] Add Expr[Int] Expr[Int]
+    for[T] case[T] Eq Expr[T] Expr[T]
+}
 ```
 
 ### Interfaces
@@ -571,10 +660,19 @@ new Thingy::Foo 0 1
 Interfaces offer a method to generalize code in object oriented way that is compatible with type errasure.
 
 ```hs
-pin interface Iterable[out T] {
-    pin def iter[U]: ForElse[T, U] -> U
+enum LoopStep[out C, out U] {
+    case Continue C
+    case Break U
+}
 
-    pin def pop: Maybe[T] = {
+interface ForEnd[in T, out U] {
+    def step: T -> LoopStep[Self, U]
+}
+
+pin interface Drain[out T] {
+    def iter[U]: ForEnd[T, U] -> U
+
+    def pop: Maybe[T] = {
         self.iter new ForElse {
             .give item = Exit $ Some item
             .end = None
