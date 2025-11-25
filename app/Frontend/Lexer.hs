@@ -2,6 +2,7 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# HLINT ignore "Functor law" #-}
 {-# OPTIONS_GHC -Wno-missing-signatures #-}
+{-# HLINT ignore "Use newtype instead of data" #-}
 module Frontend.Lexer (
     Token,
     LexerError,
@@ -23,6 +24,7 @@ import Parser.Combinators (expectEqualSpanned, expectNotequalSpanned, expectPred
 import Control.Monad (join)
 import Data.Maybe (maybeToList)
 import Data.Bifunctor (Bifunctor (..))
+import Reporting (PoisonID, CompilerExcept, raise, raiseInit)
 
 symbolicCharecters :: Set Char
 symbolicCharecters = fromList "!$%^&*-+=:@~|<>?./"
@@ -298,27 +300,6 @@ lexTokens = fmap join $ many $ (lexToken <&> pure)
     <|> (lexString <&> toList)
     <|> (expectNotequalSpanned CloseCurly <&> fmap (asChar >>> RawElementary) <&> pure)
 
-data Token
-    = Keyword String
-    | Snake String
-    | Camel String
-    | Symbol String
-    | Indentation String
-    | StringStart String
-    | StringMiddle String
-    | StringEnd String
-    | SmallString String
-    | Natural Nat
-    | NaturalWithUnit Nat String
-    | Decorator String
-    | Documentation String
-    | Elementary Char
-    | Erronious
-    | ErroniousOpenSquare
-    -- | ErroniousOpenCurly
-    -- | ErroniousOpenParens
-    deriving Show
-
 camelKeyWords :: Set String
 camelKeyWords = fromList [
     -- datatypes
@@ -382,7 +363,8 @@ snakeKeyWords = fromList [
         "yield",
         "break",
         "continue",
-        "pass",
+        "nobreak",
+        "pass", -- placeholder action
         "throw",
         "try",
         "catch",
@@ -403,6 +385,15 @@ snakeKeyWords = fromList [
         "await",
         "spawn",
         "par" -- linear dual of tuple for async environments
+    ]
+
+statementContinuationKeyWords :: Set String
+statementContinuationKeyWords = fromList [
+        "elif",
+        "else",
+        "catch",
+        "with",
+        "nobreak"
     ]
 
 symbolicKeyWords :: Set String
@@ -432,55 +423,97 @@ symbolicKeyWords = fromList [
         "~" -- linear consumer type, like T -* Unit for async environments
     ]
 
+-- cannot be overriden, has special precedent
+specialOperators :: Set String
+specialOperators = fromList [
+    -- numberic
+        "+",
+        "-",
+        "*",
+        "/",
+    -- logical
+        "&&",
+        "||"
+    ]
+
+data Token
+    = Keyword String
+    | Snake String
+    | Camel String
+    | Symbol String
+    | Indentation String
+    | StringStart String
+    | StringMiddle String
+    | StringEnd String
+    | SmallString String
+    | Natural Nat
+    | NaturalWithUnit Nat String
+    | Decorator String
+    | Documentation String
+    | Elementary Char
+    | Erronious PoisonID
+    -- | ErroniousOpenCurly
+    -- | ErroniousOpenParens
+    deriving Show
+
+-- fatal
+data LexerError
+    = UnclosedCurly TextPos
+    | LexerParseError
+    deriving Show
+
 decoratorKeyWords :: Set String
 decoratorKeyWords = fromList [
         "unit", -- for units on numbers, such as in `3 + 4i`
         "assign" -- could be a neat way to assign `todo` things to certain groups / people
     ]
 
-composite :: [Spanned RawToken] -> [Spanned Token]
-composite [] = []
+composite :: [Spanned RawToken] -> CompilerExcept [Spanned Token]
+composite [] = pure []
 -- grouping
-composite (s :@ RawNatural n   : s' :@ RawSnakeName unit : toks) = (s <> s') :@ NaturalWithUnit n unit : composite toks
+composite (s :@ RawNatural n   : s' :@ RawSnakeName unit : toks) = ((s <> s') :@ NaturalWithUnit n unit :) <$> composite toks
 composite (s :@ DecoratorStart : s' :@ RawSnakeName name : toks) = if decoratorKeyWords & member name
-    then (s <> s') :@ Decorator name      : composite toks
-    else (s <> s') :@ ErroniousOpenSquare : composite toks
+    then ((s <> s') :@ Decorator name      :) <$> composite toks
+    else raiseInit ("invalid decorator name " <> show name)
+        >>= \poison -> ((s <> s') :@ Erronious poison :) <$> composite toks
 composite (s :@ DecoratorStart : s' :@ WhiteSpace : s'' :@ RawSnakeName name : toks) = if decoratorKeyWords & member name
-    then (s <> s' <> s'') :@ Decorator name      : composite toks
-    else (s <> s' <> s'') :@ ErroniousOpenSquare : composite toks
+    then ((s <> s' <> s'') :@ Decorator name      :) <$> composite toks
+    else raiseInit ("invalid decorator name " <> show name)
+        >>= \poison -> ((s <> s' <> s'') :@ Erronious poison :) <$> composite toks
 -- spliting
--- composite (s :@ RawSnakeName "elif"  : toks) = s :@ Keyword "else" : s :@ Keyword "if" : composite toks
-composite (s :@ RawSymbolicName "?." : toks) = s :@ Keyword "?"    : s :@ Keyword "."  : composite toks
+composite (s :@ RawSymbolicName "?." : toks) = (\ts -> s :@ Keyword "?" : s :@ Keyword "." : ts) <$> composite toks
 -- errors
-composite (s :@ DecoratorStart : toks) = s :@ ErroniousOpenSquare : composite toks
-composite (s :@ RawCamelName _ : s' :@ RawSnakeName _ : toks) = (s <> s') :@ Erronious : composite toks
-composite (s :@ RawSnakeName _ : s' :@ RawCamelName _ : toks) = (s <> s') :@ Erronious : composite toks
+composite (s :@ DecoratorStart : toks) = raiseInit "invalid decorator syntax"
+    >>= \poison -> (s :@ Erronious poison :) <$> composite toks
+composite (s :@ RawCamelName _ : s' :@ RawSnakeName _ : toks) = raiseInit "snake and camel names must be seperated by a space"
+    >>= \poison -> ((s <> s') :@ Erronious poison :) <$> composite toks
+composite (s :@ RawSnakeName _ : s' :@ RawCamelName _ : toks) = raiseInit "snake and camel names must be seperated by a space"
+    >>= \poison -> ((s <> s') :@ Erronious poison :) <$> composite toks
 -- keywords
 composite (s :@ RawCamelName    name : toks) = if camelKeyWords & member name
-    then s :@ Keyword name : composite toks
-    else s :@ Camel name   : composite toks
+    then (s :@ Keyword name :) <$> composite toks
+    else (s :@ Camel name   :) <$> composite toks
 composite (s :@ RawSnakeName    name : toks) = if snakeKeyWords & member name
-    then s :@ Keyword name : composite toks
-    else s :@ Snake name   : composite toks
+    then (s :@ Keyword name :) <$> composite toks
+    else (s :@ Snake name   :) <$> composite toks
 composite (s :@ RawSymbolicName name : toks) = if symbolicKeyWords & member name
-    then s :@ Keyword name : composite toks
-    else s :@ Symbol name  : composite toks
+    then (s :@ Keyword name :) <$> composite toks
+    else (s :@ Symbol name  :) <$> composite toks
 -- defaults
-composite (s :@ RawIndentation i    : toks) = s :@ Indentation i     : composite toks
-composite (s :@ RawSmallString str  : toks) = s :@ SmallString str   : composite toks
-composite (s :@ RawStringStart str  : toks) = s :@ StringStart str   : composite toks
-composite (s :@ RawStringMiddle str : toks) = s :@ StringMiddle str  : composite toks
-composite (s :@ RawStringEnd str    : toks) = s :@ StringEnd str     : composite toks
-composite (s :@ RawDocComment str   : toks) = s :@ Documentation str : composite toks
-composite (s :@ RawNatural n        : toks) = s :@ Natural n         : composite toks
-composite (s :@ RawElementary c     : toks) = s :@ Elementary c      : composite toks
+composite (s :@ RawIndentation i    : toks) = (s :@ Indentation i     :) <$> composite toks -- we want to kill this
+composite (s :@ RawSmallString str  : toks) = (s :@ SmallString str   :) <$> composite toks
+composite (s :@ RawStringStart str  : toks) = (s :@ StringStart str   :) <$> composite toks
+composite (s :@ RawStringMiddle str : toks) = (s :@ StringMiddle str  :) <$> composite toks
+composite (s :@ RawStringEnd str    : toks) = (s :@ StringEnd str     :) <$> composite toks
+composite (s :@ RawDocComment str   : toks) = (s :@ Documentation str :) <$> composite toks
+composite (s :@ RawNatural n        : toks) = (s :@ Natural n         :) <$> composite toks
+composite (s :@ RawElementary c     : toks) = (s :@ Elementary c      :) <$> composite toks
 composite (_ :@ WhiteSpace          : toks) =                          composite toks
 
--- TODO: define error type
-type LexerError = ()
+convertErr :: ParseError (Spanned ClassifiedChar) Expectation -> CompilerExcept LexerError
+convertErr _ = pure LexerParseError
 
-convertErr :: ParseError (Spanned ClassifiedChar) Expectation -> LexerError
-convertErr _ = ()
-
-lexer :: EditorInfo -> [String] -> Either LexerError [Spanned Token]
-lexer i ls = prepareLines i ls & runParser lexTokens & bimap convertErr composite
+lexer :: EditorInfo -> [String] -> CompilerExcept (Either LexerError [Spanned Token])
+lexer i ls = case prepareLines i ls & runParser lexTokens of
+    Left err -> Left <$> convertErr err
+    Right toks -> Right <$> composite toks

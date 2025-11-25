@@ -345,11 +345,11 @@ if cond
 
 #### For In
 
-For iterates over a collection allowing you to `break` the loop prematurely, otherwise you will enter the `end` branch if it is defined.
+For iterates over a collection allowing you to `break` the loop prematurely, otherwise you will enter the `nobreak` branch if it is defined.
 
 ```bnf
 <for-in> ::=
-    "for" <pattern> "in" <expr> <do-action> ("end" <action>)?
+    "for" <pattern> "in" <expr> <do-action> ("nobreak" <action>)?
 
 <break> ::=
     "break" <label>? <expr>?
@@ -369,7 +369,7 @@ for x in xs do {
         continue
     }
     n -= 1
-} end
+} nobreak
     Some n
 ```
 
@@ -564,8 +564,8 @@ else
 
 <for-in-stmt> ::=
     "for" <pattern> "in" <expr> <do-action> (
-        "end" <action>
-        | <item"end"> <action>
+        "nobreak" <action>
+        | <item"nobreak"> <action>
     )?
     
 <match-with-stmt> ::=

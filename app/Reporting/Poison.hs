@@ -2,6 +2,7 @@ module Reporting.Poison (
     PoisonID,
     CompilationError,
     PoisonService,
+    PoisonEvent,
     reportErr,
     reportInitErr,
     runService
@@ -16,17 +17,23 @@ type PoisonID = Nat
 
 type CompilationError = String
 
-type PoisonService = StateT PoisonID (Writer [(CompilationError, PoisonID, [PoisonID])])
+data PoisonEvent = PoisonEvent {
+    causes :: [PoisonID],
+    poison :: PoisonID,
+    reason :: CompilationError
+} deriving Show
+
+type PoisonService = StateT PoisonID (Writer [PoisonEvent])
 
 reportErr :: CompilationError -> [PoisonID] -> PoisonService PoisonID
-reportErr err causes = do
+reportErr err causes' = do
     n <- get
     put (n + 1)
-    lift $ tell [(err, n, causes)]
+    lift $ tell [PoisonEvent causes' n err]
     return n
 
 reportInitErr :: CompilationError -> PoisonService PoisonID
 reportInitErr err = reportErr err []
 
-runService :: PoisonService a -> Writer [(CompilationError, PoisonID, [PoisonID])] a
+runService :: PoisonService a -> Writer [PoisonEvent] a
 runService = flip runStateT 0 >>> fmap fst
