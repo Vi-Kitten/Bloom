@@ -40,6 +40,9 @@ data Spanned a = (:@) Span a
 instance Functor Spanned where
     fmap f (s :@ x) = s :@ f x
 
+instance Semigroup a => Semigroup (Spanned a) where
+    s :@ x <> s' :@ y = (s <> s') :@ (x <> y)
+
 coalesceWith :: Span -> [Spanned a] -> Spanned [a]
 coalesceWith s [] = s :@ []
 coalesceWith s (s' :@ x : xs) = (x :) <$> coalesceWith (s <> s') xs
