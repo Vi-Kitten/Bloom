@@ -9,13 +9,13 @@
 {-# LANGUAGE LambdaCase #-}
 module Frontend.Lexer (
     Token,
-    debugLexLine
+    debugLexLines
 ) where
 
 import Data.Set (Set, fromList, member)
 import Data.Function ((&))
 import Data.Char (isUpper, isLower, isSpace, isAlphaNum)
-import Frontend (EditorInfo (..))
+import Frontend (EditorInfo (..), widthOf)
 import GHC.TypeLits (Nat)
 import Control.Arrow ((>>>))
 import Data.Functor ((<&>), ($>))
@@ -24,6 +24,7 @@ import Reporting (PoisonID, CompilerExcept, raise, raiseInit)
 import Data.Kind (Type)
 import Data.List.NonEmpty (NonEmpty (..), fromList, toList)
 import Data.Maybe (mapMaybe)
+import Parser.Spanned (Spanned (..), Span (..), TextPos (..))
 
 data MatchFail t
     = UnexpectedEOS
@@ -55,6 +56,7 @@ instance Functor (MatchAccept t) where
     fmap f (Finish x) = Finish $ f x
     fmap f (Continue mx matcher) = Continue (f <$> mx) $ mapMatcher f matcher
 
+-- legacy, kept for reference
 lexWith :: [Matcher t a] -> [t] -> [Either (MatchFail t) a]
 lexWith _ [] = []
 lexWith matchers (t : ts) = case matchers & mapMaybe (($ t) >>> either (const Nothing) Just) of
@@ -66,6 +68,20 @@ lexWith matchers (t : ts) = case matchers & mapMaybe (($ t) >>> either (const No
             Left ex -> maybe (Left $ ExpectedFound ex t') Right mx : lexWith matchers (t' : ts')
             Right acc -> maxMunch acc ts'
         maxMunch (Continue mx _) [] = [maybe (Left UnexpectedEOS) Right mx]
+
+lexLineWith :: EditorInfo -> Nat -> Nat -> [Matcher Char a] -> [Char] -> [Spanned (Either (MatchFail Char) a)]
+lexLineWith _ _ _ _ [] = []
+lexLineWith i line_num starting_char matchers (t : ts) =
+    let next_char = starting_char + (i & widthOf t) in case matchers & mapMaybe (($ t) >>> either (const Nothing) Just) of
+        [] -> between starting_char next_char :@ Left (UnrecognisedInput t) : lexLineWith i line_num next_char matchers ts
+        acc : _ -> maxMunch starting_char next_char acc ts
+    where
+        between c c' = Span (TextPos line_num c) (TextPos line_num c')
+        maxMunch c c' (Finish x) ts' = between c c' :@ Right x : lexLineWith i line_num c' matchers ts'
+        maxMunch c c' (Continue mx matcher) (t' : ts') = case matcher t' of
+            Left ex -> between c c' :@ maybe (Left $ ExpectedFound ex t') Right mx : lexLineWith i line_num c' matchers (t' : ts')
+            Right acc -> maxMunch c (c' + (i & widthOf t')) acc ts'
+        maxMunch c c' (Continue mx _) [] = [between c c' :@ maybe (Left UnexpectedEOS) Right mx]
 
 data PreToken
     = WhiteSpace
@@ -91,7 +107,7 @@ whiteSpaceMatcher _    = Left "white space charecter"
 
 stringMatcher :: Matcher Char PreToken
 stringMatcher = expectThen '\"' $ mapMatcher StringLit stringBodyMatcher
-    where 
+    where
         stringBodyMatcher :: Matcher Char String
         stringBodyMatcher '\"' = Right $ Finish ""
         stringBodyMatcher '\\' = Right $ Continue Nothing $ \case
@@ -196,18 +212,27 @@ lexer = [
     ]
 
 reportToken :: Either (MatchFail Char) a -> CompilerExcept (Either PoisonID a)
-reportToken (Left UnexpectedEOS) = raiseInit "unexpected end of file" <&> Left
+reportToken (Left UnexpectedEOS) = raiseInit "unexpected end of line" <&> Left
 reportToken (Left (ExpectedFound ex t)) = raiseInit ("expected " ++ ex ++ ", found: " ++ show t) <&> Left
 reportToken (Left (UnrecognisedInput t)) = raiseInit ("charecter " ++ show t ++ " is not recognised as the start of any token") <&> Left
 reportToken (Right x) = pure $ Right x
 
-lexLine :: String -> CompilerExcept [Either PoisonID PreToken]
-lexLine line = do
-    let (start, body) = break (\c -> c /= ' ' || c /= '\t') line
-    mapM reportToken (Right (Indentation start) : lexWith lexer body)
+reportSpannedToken :: Spanned (Either (MatchFail Char) a) -> CompilerExcept (Spanned (Either PoisonID a))
+reportSpannedToken (s :@ tok) = (s :@) <$> reportToken tok
 
-debugLexLine :: String -> CompilerExcept String
-debugLexLine = lexLine >>> fmap show
+lexLine :: EditorInfo -> Nat -> String -> CompilerExcept [Spanned (Either PoisonID PreToken)]
+lexLine i line_number line_txt = do
+    let (line_start, line_body) = break (\c -> c /= ' ' || c /= '\t') line_txt
+    let start_width = sum [i & widthOf t | t <- line_start]
+    let start_span = Span (TextPos line_number 0) (TextPos line_number start_width)
+    mapM reportSpannedToken (start_span :@ Right (Indentation line_start) : lexLineWith i line_number start_width lexer line_body)
+
+lexLines :: EditorInfo -> [String] -> CompilerExcept [Spanned (Either PoisonID PreToken)]
+lexLines i lines_txt = sequence [ lexLine i n line_txt | (n, line_txt) <- zip [0..] lines_txt] <&> join
+
+
+debugLexLines :: EditorInfo -> [String] -> CompilerExcept [String]
+debugLexLines i lines_txt = lexLines i lines_txt <&> fmap show
 
 camelKeyWords :: Set String
 camelKeyWords = Data.Set.fromList [
@@ -341,7 +366,9 @@ specialOperators = Data.Set.fromList [
         "+",
         "-",
         "*",
-        "/"
+        "/",
+        "++",
+        "--"
     ]
 
 decoratorKeyWords :: Set String

@@ -1,6 +1,7 @@
 module Frontend (
     EditorInfo (..),
-    readLines
+    readLines,
+    widthOf
 ) where
 
 import Data.Text.Lazy (lines, unpack)
@@ -13,6 +14,12 @@ data EditorInfo = EditorInfo {
     themeIsDark :: Bool,
     tabSize :: Nat
 }
+
+widthOf :: Char -> EditorInfo -> Nat
+widthOf '\t' i = tabSize i
+widthOf '\n' _ = 0
+widthOf '\r' _ = 0
+widthOf _    _ = 1
 
 readLines :: FilePath -> IO [String]
 readLines path = do

@@ -4,9 +4,11 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE DataKinds #-}
-module Main where
+module Main (
+    main
+) where
 import Frontend (readLines, EditorInfo (..))
-import Frontend.Lexer (debugLexLine)
+import Frontend.Lexer (debugLexLines)
 import Reporting (runReporter)
 
 debugEditor :: EditorInfo
@@ -21,7 +23,7 @@ main = do
     putStrLn "what file should I lex?"
     path <- getLine
     ls <- readLines path
-    let (except, events) = runReporter $ mapM debugLexLine ls
+    let (except, events) = runReporter $ debugLexLines debugEditor ls
     () <$ mapM print events
     case except of
         Left fatal -> putStrLn "internal compiler error" >> print fatal

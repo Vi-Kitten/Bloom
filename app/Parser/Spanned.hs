@@ -35,7 +35,10 @@ instance Semigroup Span where
     }
 
 data Spanned a = (:@) Span a
-    deriving Show
+
+instance Show a => Show (Spanned a) where
+  show ((Span (TextPos l c) (TextPos l' c')) :@ x) = "(" ++ show l ++ ":" ++ show c ++ " - " ++ show l' ++ ":" ++ show c' ++ ") " ++ show x
+
 
 instance Functor Spanned where
     fmap f (s :@ x) = s :@ f x
