@@ -25,40 +25,47 @@ import Data.Kind (Type)
 import Data.List.NonEmpty (NonEmpty (..), fromList, toList)
 import Data.Maybe (mapMaybe)
 
-type Matcher t a = t -> Maybe (MatchAccept t a)
+data MatchFail t
+    = UnexpectedEOS
+    | ExpectedFound Expectation t
+    | UnrecognisedInput t
+
+type Expectation = String
+
+type Matcher t a = t -> Either Expectation (MatchAccept t a)
 
 mapMatcher :: (a -> b) -> Matcher t a -> Matcher t b
 mapMatcher f = (>>> fmap (fmap f))
 
-expectThen :: (t -> Bool) -> Matcher t a -> Matcher t a
-expectThen p matcher t = if p t
-    then Just $ Continue Nothing $ pure matcher
-    else Nothing
+expectThen :: Show t => Eq t => t -> Matcher t a -> Matcher t a
+expectThen t matcher t' = if t == t'
+    then Right $ Continue Nothing matcher
+    else Left $ show t
 
-expectFinally :: (t -> Bool) -> a -> Matcher t a
-expectFinally p x t = if p t
-    then Just $ Finish x
-    else Nothing
+expectFinally :: Show t => Eq t => t -> a -> Matcher t a
+expectFinally t x t' = if t == t'
+    then Right $ Finish x
+    else Left $ show t
 
 data MatchAccept t a
     = Finish a
-    | Continue (Maybe a) (NonEmpty (Matcher t a))
+    | Continue (Maybe a) (Matcher t a)
 
 instance Functor (MatchAccept t) where
     fmap f (Finish x) = Finish $ f x
-    fmap f (Continue mx matchers) = Continue (f <$> mx) $ mapMatcher f <$> matchers
+    fmap f (Continue mx matcher) = Continue (f <$> mx) $ mapMatcher f matcher
 
-lexWith :: [Matcher t a] -> [t] -> [Maybe a]
+lexWith :: [Matcher t a] -> [t] -> [Either (MatchFail t) a]
 lexWith _ [] = []
-lexWith matchers (t : ts) = case matchers & mapMaybe ($ t) of
-        [] -> Nothing : lexWith matchers ts
+lexWith matchers (t : ts) = case matchers & mapMaybe (($ t) >>> either (const Nothing) Just) of
+        [] -> Left (UnrecognisedInput t) : lexWith matchers ts
         acc : _ -> maxMunch acc ts
     where
-        maxMunch (Finish x) ts' = Just x : lexWith matchers ts'
-        maxMunch (Continue mx matchers') (t' : ts') = case matchers' & toList & mapMaybe ($ t') of
-            [] -> mx : lexWith matchers (t' : ts')
-            acc : _ -> maxMunch acc ts'
-        maxMunch (Continue mx _) [] = [mx]
+        maxMunch (Finish x) ts' = Right x : lexWith matchers ts'
+        maxMunch (Continue mx matcher) (t' : ts') = case matcher t' of
+            Left ex -> maybe (Left $ ExpectedFound ex t') Right mx : lexWith matchers (t' : ts')
+            Right acc -> maxMunch acc ts'
+        maxMunch (Continue mx _) [] = [maybe (Left UnexpectedEOS) Right mx]
 
 data PreToken
     = WhiteSpace
@@ -76,41 +83,41 @@ data PreToken
     deriving Show
 
 whiteSpaceMatcher :: Matcher Char PreToken
-whiteSpaceMatcher ' '  = Just $ Continue (Just WhiteSpace) $ pure whiteSpaceMatcher
-whiteSpaceMatcher '\t' = Just $ Continue (Just WhiteSpace) $ pure whiteSpaceMatcher
-whiteSpaceMatcher '\n' = Just $ Continue (Just WhiteSpace) $ pure whiteSpaceMatcher
-whiteSpaceMatcher '\r' = Just $ Continue (Just WhiteSpace) $ pure whiteSpaceMatcher
-whiteSpaceMatcher _    = Nothing
+whiteSpaceMatcher ' '  = Right $ Continue (Just WhiteSpace) whiteSpaceMatcher
+whiteSpaceMatcher '\t' = Right $ Continue (Just WhiteSpace) whiteSpaceMatcher
+whiteSpaceMatcher '\n' = Right $ Continue (Just WhiteSpace) whiteSpaceMatcher
+whiteSpaceMatcher '\r' = Right $ Continue (Just WhiteSpace) whiteSpaceMatcher
+whiteSpaceMatcher _    = Left "white space charecter"
 
 stringMatcher :: Matcher Char PreToken
-stringMatcher = expectThen (== '\"') $ mapMatcher StringLit stringBodyMatcher
+stringMatcher = expectThen '\"' $ mapMatcher StringLit stringBodyMatcher
     where 
         stringBodyMatcher :: Matcher Char String
-        stringBodyMatcher '\"' = Just $ Finish ""
-        stringBodyMatcher '\\' = Just $ Continue Nothing $ pure $ \case
-            '\\' -> Just $ Continue Nothing $ pure $ mapMatcher ('\\' :) stringBodyMatcher
-            't'  -> Just $ Continue Nothing $ pure $ mapMatcher ('\t' :) stringBodyMatcher
-            'n'  -> Just $ Continue Nothing $ pure $ mapMatcher ('\n' :) stringBodyMatcher
-            'r'  -> Just $ Continue Nothing $ pure $ mapMatcher ('\r' :) stringBodyMatcher
-            _    -> Nothing
-        stringBodyMatcher c = Just $ Continue Nothing $ pure $ mapMatcher (c :) stringBodyMatcher
+        stringBodyMatcher '\"' = Right $ Finish ""
+        stringBodyMatcher '\\' = Right $ Continue Nothing $ \case
+            '\\' -> Right $ Continue Nothing $ mapMatcher ('\\' :) stringBodyMatcher
+            't'  -> Right $ Continue Nothing $ mapMatcher ('\t' :) stringBodyMatcher
+            'n'  -> Right $ Continue Nothing $ mapMatcher ('\n' :) stringBodyMatcher
+            'r'  -> Right $ Continue Nothing $ mapMatcher ('\r' :) stringBodyMatcher
+            _    -> Left "escaped charecter"
+        stringBodyMatcher c = Right $ Continue Nothing $ mapMatcher (c :) stringBodyMatcher
 
 charMatcher :: Matcher Char PreToken
-charMatcher = expectThen (== '\'') $ \case
-    '\\' -> Just $ Continue Nothing $ pure (\case
-        '\\' -> Just $ Continue Nothing $ pure $ expectFinally (== '\'') (CharLit '\\')
-        't'  -> Just $ Continue Nothing $ pure $ expectFinally (== '\'') (CharLit '\t')
-        'n'  -> Just $ Continue Nothing $ pure $ expectFinally (== '\'') (CharLit '\n')
-        'r'  -> Just $ Continue Nothing $ pure $ expectFinally (== '\'') (CharLit '\r')
-        _ -> Nothing
+charMatcher = expectThen '\'' $ \case
+    '\\' -> Right $ Continue Nothing (\case
+        '\\' -> Right $ Continue Nothing $ expectFinally '\'' (CharLit '\\')
+        't'  -> Right $ Continue Nothing $ expectFinally '\'' (CharLit '\t')
+        'n'  -> Right $ Continue Nothing $ expectFinally '\'' (CharLit '\n')
+        'r'  -> Right $ Continue Nothing $ expectFinally '\'' (CharLit '\r')
+        _ -> Left "escaped charecter"
         )
-    c    -> Just $ Continue Nothing $ pure $ expectFinally (== '\'') (CharLit c)
+    c    -> Right $ Continue Nothing $ expectFinally '\'' (CharLit c)
 
 numMatcher :: Matcher Char PreToken
 numMatcher = mapMatcher NumLit $ numContinueMatcher 0
     where
         next n n' = (10 * n) + n'
-        continueMatching n n' = Just $ Continue (Just $ next n n') $ pure $ numContinueMatcher (next n n')
+        continueMatching n n' = Right $ Continue (Just $ next n n') $ numContinueMatcher (next n n')
 
         numContinueMatcher :: Nat -> Matcher Char Nat
         numContinueMatcher n '0' = continueMatching n 0
@@ -123,7 +130,7 @@ numMatcher = mapMatcher NumLit $ numContinueMatcher 0
         numContinueMatcher n '7' = continueMatching n 7
         numContinueMatcher n '8' = continueMatching n 8
         numContinueMatcher n '9' = continueMatching n 9
-        numContinueMatcher _ _   = Nothing
+        numContinueMatcher _ _   = Left "digit"
 
 symbolicCharecters :: Set Char
 symbolicCharecters = Data.Set.fromList "!$%^&*-+=:@~|<>?./"
@@ -133,47 +140,47 @@ symbolMatcher = mapMatcher SymbolName symbolMatcherInner
     where
         symbolMatcherInner :: Matcher Char String
         symbolMatcherInner c
-            | symbolicCharecters & member c = Just $ Continue (Just [c]) $ pure $ mapMatcher (c :) symbolMatcherInner
-            | otherwise                     = Nothing
+            | symbolicCharecters & member c = Right $ Continue (Just [c]) $ mapMatcher (c :) symbolMatcherInner
+            | otherwise                     = Left "symbolic charecter (one of \"!$%^&*-+=:@~|<>?./\")"
 
 snakeMatcher :: Matcher Char PreToken
 snakeMatcher = mapMatcher SnakeName snakeMatcherInner
     where
         snakeMatcherInner :: Matcher Char String
-        snakeMatcherInner '_' = Just $ Continue (Just "_") $ pure $ mapMatcher ('_' :) snakeMatcherInner
+        snakeMatcherInner '_' = Right $ Continue (Just "_") $ mapMatcher ('_' :) snakeMatcherInner
         snakeMatcherInner c
-            | isLower c = Just $ Continue (Just [c]) $ pure $ mapMatcher (c :) snakeMatcherInner
-            | otherwise = Nothing
+            | isLower c = Right $ Continue (Just [c]) $ mapMatcher (c :) snakeMatcherInner
+            | otherwise = Left "lowercase charecter or underscore"
 
 pascalMatcher :: Matcher Char PreToken
 pascalMatcher c
-    | isUpper c = Just $ Continue (Just $ PascalName [c]) $ pure $ mapMatcher ((c :) >>> PascalName) pascalBodyMatcher
-    | otherwise = Nothing
+    | isUpper c = Right $ Continue (Just $ PascalName [c]) $ mapMatcher ((c :) >>> PascalName) pascalBodyMatcher
+    | otherwise = Left "uppercase charecter"
     where
         pascalBodyMatcher :: Matcher Char String
         pascalBodyMatcher c
-            | isAlphaNum c = Just $ Continue (Just [c]) $ pure $ mapMatcher (c :) pascalBodyMatcher
-            | otherwise    = Nothing
+            | isAlphaNum c = Right $ Continue (Just [c]) $ mapMatcher (c :) pascalBodyMatcher
+            | otherwise    = Left "alphanumberic charecter"
 
 -- general purpose matcher thing for `#` syntax
 hashMatcher :: Matcher Char PreToken
-hashMatcher = expectThen (== '#') $ \case
-    ' ' -> Just $ Continue (Just Comment) $ pure $ mapMatcher (const Comment) matchComment
-    '|' -> Just $ Continue (Just $ DocComment "") $ pure $ expectThen (== ' ') $ mapMatcher DocComment matchComment
-    '[' -> Just $ Finish HashDecorator
-    _   -> Nothing
+hashMatcher = expectThen '#' $ \case
+    ' ' -> Right $ Continue (Just Comment) $ mapMatcher (const Comment) matchComment
+    '|' -> Right $ Continue (Just $ DocComment "") $ expectThen ' ' $ mapMatcher DocComment matchComment
+    '[' -> Right $ Finish HashDecorator
+    _   -> Left "one of ' ', '|', or '['"
     where
         matchComment :: Matcher Char String
-        matchComment '\n' = Nothing
-        matchComment c    = Just $ Continue (Just [c]) $ pure $ mapMatcher (c :) matchComment
+        matchComment '\n' = Left "no newlines"
+        matchComment c    = Right $ Continue (Just [c]) $ mapMatcher (c :) matchComment
 
 syntaxCharecters :: Set Char
 syntaxCharecters = Data.Set.fromList "()[]{}"
 
 syntaxMatcher :: Matcher Char PreToken
 syntaxMatcher c
-    | syntaxCharecters & member c = Just $ Finish (SyntaxChar c)
-    | otherwise                   = Nothing
+    | syntaxCharecters & member c = Right $ Finish (SyntaxChar c)
+    | otherwise                   = Left "one of \",;()[]{}\""
 
 lexer :: [Matcher Char PreToken]
 lexer = [
@@ -188,11 +195,16 @@ lexer = [
         syntaxMatcher
     ]
 
-lexLine :: String -> CompilerExcept [Maybe PreToken]
+reportToken :: Either (MatchFail Char) a -> CompilerExcept (Either PoisonID a)
+reportToken (Left UnexpectedEOS) = raiseInit "unexpected end of file" <&> Left
+reportToken (Left (ExpectedFound ex t)) = raiseInit ("expected " ++ ex ++ ", found: " ++ show t) <&> Left
+reportToken (Left (UnrecognisedInput t)) = raiseInit ("charecter " ++ show t ++ " is not recognised as the start of any token") <&> Left
+reportToken (Right x) = pure $ Right x
+
+lexLine :: String -> CompilerExcept [Either PoisonID PreToken]
 lexLine line = do
     let (start, body) = break (\c -> c /= ' ' || c /= '\t') line
-    mapM pure (Just (Indentation start) : lexWith lexer body)
-
+    mapM reportToken (Right (Indentation start) : lexWith lexer body)
 
 debugLexLine :: String -> CompilerExcept String
 debugLexLine = lexLine >>> fmap show
@@ -341,6 +353,8 @@ decoratorKeyWords = Data.Set.fromList [
 data Token
     = Keyword String
     | SpecialOperator String
+    | Comma
+    | Semicolon
     | OpenRound
     | CloseRound
     | OpenSquare
@@ -357,5 +371,5 @@ data Token
     | Natural Nat
     | NaturalWithUnit Nat String
     | Documentation String
-    | Erronious PoisonID
+    | Malformed PoisonID
     deriving Show
