@@ -16,10 +16,12 @@ import Control.Monad.Morph (MonadTrans(..))
 import Control.Monad.Except (MonadError(..))
 import Control.Monad.Writer.Lazy (runWriter)
 import Control.Arrow ((>>>))
+import Parser.Spanned (Span)
 
 data InternalCompilerError
     = InferenceKeyError
     | KindTrackingError
+    | LexerIdentifiedIncorrectSyntax Span Char
     deriving Show
 
 type CompilerExcept = ExceptT InternalCompilerError PoisonService

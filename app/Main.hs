@@ -8,7 +8,7 @@ module Main (
     main
 ) where
 import Frontend (readLines, EditorInfo (..))
-import Frontend.Lexer (debugLexLines)
+import Frontend.Lexer (processLines)
 import Reporting (runReporter)
 
 debugEditor :: EditorInfo
@@ -18,24 +18,20 @@ debugEditor = EditorInfo {
 }
 
 main :: IO ()
--- main = getLine >>= debugLexLine
 main = do
     putStrLn "what file should I lex?"
     path <- getLine
     ls <- readLines path
-    let (except, events) = runReporter $ debugLexLines debugEditor ls
+    
+    -- let (except', events') = runReporter $ debugLexLines debugEditor ls
+    -- () <$ mapM print events'
+    -- case except' of
+    --     Left fatal -> putStrLn "internal compiler error" >> print fatal
+    --     Right ls' -> () <$ mapM print ls'
+
+    let (except, events) = runReporter $ processLines debugEditor ls
     () <$ mapM print events
     case except of
         Left fatal -> putStrLn "internal compiler error" >> print fatal
         Right ls' -> () <$ mapM print ls'
--- main = do
---     putStrLn "what file should I lex?"
---     path <- getLine
---     ls <- readLines path
---     let (except, events) = runReporter $ lexer debugEditor ls
---     () <$ sequence [print event | event <- events]
---     case except of
---         Left fatal -> putStrLn "internal compiler error" >> print fatal
---         Right (Left err) -> putStrLn "lexer error" >> print err
---         Right (Right toks) -> () <$ sequence [print tok | tok <- toks]
 

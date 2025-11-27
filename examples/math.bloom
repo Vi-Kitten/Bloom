@@ -7,3 +7,11 @@ def * : Nat -> Nat -> Nat = fn
     | 0  ; _   => 0
     | _  ; 0   => 0
     | x++; y++ => 1 + x + y + (x * y)
+
+def sum (xs : List[Nat]) = {
+    let mut n = 0
+    for x in xs {
+        n += x
+    }
+    n
+}
