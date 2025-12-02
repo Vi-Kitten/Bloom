@@ -1,4 +1,4 @@
-module Parser.Spanned (
+module Frontend.Spanned (
     TextPos (..),
     Span (..),
     Spanned (..),

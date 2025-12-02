@@ -23,7 +23,7 @@ import Data.Functor ((<&>))
 import Control.Monad (join)
 import Reporting (PoisonID, CompilerExcept, raise, raiseInit, internalFailure, InternalCompilerError (..))
 import Data.Maybe (mapMaybe)
-import Parser.Spanned (Spanned (..), Span (..), TextPos (..), startPoint, endPoint)
+import Frontend.Spanned (Spanned (..), Span (..), TextPos (..), startPoint, endPoint)
 import Data.List (isPrefixOf)
 
 data MatchFail
