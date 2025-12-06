@@ -4,6 +4,9 @@
 {-# LANGUAGE ViewPatterns #-}
 
 module Utils (
+    (.&),
+    (..&),
+    (...&),
     associateLeft,
     associateRight,
     associateLeft',
@@ -11,6 +14,7 @@ module Utils (
     AlternatingListSep (..),
     AlternatingList (..),
     (+-),
+    (<:>),
     Or (..),
     pattern OrLeft,
     pattern OrRight,
@@ -20,11 +24,33 @@ module Utils (
     choose,
     chooseLeft,
     chooseRight,
-    fromExclusie
+    fromExclusie,
+    orElse,
+    (<+>),
+    (<%>),
+    both,
+    mapBoth,
+    collectLeft,
+    collectRight,
+    collect
 ) where
 
 import Data.Bifunctor (Bifunctor (..))
 import Data.Functor ((<&>))
+import Data.List.NonEmpty (NonEmpty (..), cons, nonEmpty)
+import Data.Maybe (mapMaybe, fromMaybe)
+
+infix 1 .&
+infix 1 ..&
+infix 1 ...&
+
+(.&)   :: (a, b)       -> (a -> b -> c)           -> c
+(..&)  :: (a, b, c)    -> (a -> b -> c -> d)      -> d
+(...&) :: (a, b, c, d) -> (a -> b -> c -> d -> e) -> e
+
+(.&)   (x, y) f       = f x y
+(..&)  (x, y, z) f    = f x y z
+(...&) (x, y, z, w) f = f x y z w
 
 infixr 5 :+
 
@@ -80,6 +106,11 @@ instance Applicative (AlternatingList s) where
 
 instance Monad (AlternatingList s) where
     (>>=) = bindAlternatingList
+
+infixr 5 <:>
+
+(<:>) :: Functor f => a -> f [a] -> f [a]
+(<:>) x fxs = (x :) <$> fxs
 
 -- | An inclusive or type.
 data Or a b
@@ -142,11 +173,72 @@ choose _ (JustLeft x) = Left x
 choose _ (JustRight y) = Right y
 
 chooseLeft :: Or a b -> Either a b
-chooseLeft = choose $ \x _ -> Left x
+chooseLeft (JustRight y) = Right y
+chooseLeft (OrLeft x) = Left x
 
 chooseRight :: Or a b -> Either a b
-chooseRight = choose $ \_ y -> Right y
+chooseRight (JustLeft x) = Left x
+chooseRight (OrRight y) = Right y
 
 fromExclusie :: Either a b -> Or a b
 fromExclusie (Left x) = JustLeft x
 fromExclusie (Right y) = JustRight y
+
+orElse :: Or a b -> Or a b -> Or a b
+orElse (Both x y) _ = Both x y
+orElse (JustLeft x) (JustLeft _) = JustLeft x
+orElse (JustLeft x) (OrRight y)  = Both x y
+orElse (JustRight y) (JustRight _) = JustRight y
+orElse (JustRight y) (OrLeft x)    = Both x y
+
+both :: a -> b -> Or a b -> (a, b)
+both x y = mapBoth (fromMaybe x) (fromMaybe y)
+
+mapBoth :: (Maybe a -> c) -> (Maybe b -> d) -> Or a b -> (c, d)
+mapBoth f g (Both x y)    = (f $ Just x, g $ Just y)
+mapBoth f g (JustLeft x)  = (f $ Just x, g Nothing )
+mapBoth f g (JustRight y) = (f Nothing , g $ Just y)
+
+infixr 6 <+>
+
+(<+>) :: Semigroup e => Either e a -> Either e a -> Either e a
+(<+>) (Right x) _        = Right x
+(<+>) _ (Right y)        = Right y
+(<+>) (Left e) (Left e') = Left $ e <> e'
+
+infixl 4 <%>
+
+(<%>) :: Semigroup e => Either e (a -> b) -> Either e a -> Either e b
+(<%>) (Right f) (Right x) = Right $ f x
+(<%>) (Left e) (Left e')  = Left  $ e <> e'
+(<%>) (Left e) _ = Left e
+(<%>) _ (Left e) = Left e
+
+collectLeft :: [Either a b] -> Either [a] (NonEmpty b)
+collectLeft [] = Left []
+collectLeft (Right y : es) = Right $ case collectLeft es of
+    Left _   -> y :| []
+    Right ys -> cons y ys
+collectLeft (Left x : es) = first (x :) $ collectLeft es
+
+collectRight :: [Either a b] -> Either (NonEmpty a) [b]
+collectRight [] = Right []
+collectRight (Left x : es) = Left $ case collectRight es of
+    Left xs -> cons x xs
+    Right _ -> x :| []
+collectRight (Right y : es) =  second (y :) $ collectRight es
+
+collect :: NonEmpty (Or a b) -> Or (NonEmpty a) (NonEmpty b)
+collect (o :| os) =
+    let xs = mapMaybe maybeLeft  os in
+    let ys = mapMaybe maybeRight os in
+    case o of
+        Both x y -> Both (x :| xs) (y :| ys)
+        JustLeft x -> maybe
+            (JustLeft (x :| xs))
+            (Both $ x :| xs)
+            $ nonEmpty ys
+        JustRight y -> maybe
+            (JustRight (y :| ys))
+            (flip Both $ y :| ys)
+            $ nonEmpty xs

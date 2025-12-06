@@ -25,15 +25,16 @@ import Reporting (PoisonID, CompilerExcept, raise, raiseInit, internalFailure, I
 import Data.Maybe (mapMaybe)
 import Frontend.Spanned (Spanned (..), Span (..), TextPos (..), startPoint, endPoint)
 import Data.List (isPrefixOf)
+import Utils ((<:>))
 
 data MatchFail
     = UnexpectedEOS TextPos
-    | ExpectedFound Span Expectation Char
+    | ExpectedFound Span LexExpectation Char
     | UnrecognisedInput Span Char
 
-type Expectation = String
+type LexExpectation = String
 
-type Matcher a = Char -> Either Expectation (MatchAccept a)
+type Matcher a = Char -> Either LexExpectation (MatchAccept a)
 
 mapMatcher :: (a -> b) -> Matcher a -> Matcher b
 mapMatcher f = (>>> fmap (fmap f))
@@ -394,6 +395,7 @@ data TokenIssue
     | InvalidUseOfKeyword
     | IncompleteDecorator
     | InvalidDecorator
+    | ImproperDocumentation
     deriving Show
 
 data Token
@@ -427,7 +429,7 @@ data IndentationLevel
     | Invalid String
 
 -- we could ignore stretched inline blocks, which would translate to skipping the `Nothing` cases, and in doing so parse more things.
--- 
+-- however this could lead to confusing error messages
 checkIndentation :: [Maybe String] -> String -> IndentationLevel
 checkIndentation (Nothing : _) _ = Invalid $ "expected indentation is not well defined for malformed blocks"
     ++ "\n(if you are trying to define a multi-line block ensure the opening curly bracket is immediately followed by a new line)"
@@ -444,102 +446,140 @@ checkIndentation [] _ = Above
 compose :: [Maybe String] -> [Spanned (Either PoisonID PreToken)] -> CompilerExcept [Spanned Token]
 -- white space elim
 compose indents (_ :@ Right WhiteSpace : ts) = compose indents ts
+
 compose indents (s :@ Right (SyntaxChar c) : _ :@ Right WhiteSpace : ts) = compose indents (s :@ Right (SyntaxChar c) : ts)
+
+
 -- start multi-line block
-compose indents (s :@ Right (SyntaxChar '{') : s' :@ Right (Indentation indent) : ts) = (\ts' ->
-        s :@ OpenCurly : endPoint s' :@ CurlyItem : ts'
-    ) <$> compose (Just indent : indents) ts
+compose indents (s :@ Right (SyntaxChar '{') : s' :@ Right (Indentation indent) : ts) =
+    s :@ OpenCurly <:>
+    endPoint s' :@ CurlyItem <:>
+    compose (Just indent : indents) ts
+
+
 -- empty block
-compose indents (s :@ Right (SyntaxChar '{') : s' :@ Right (SyntaxChar '}') : ts) = (\ts' ->
-        s :@ OpenCurly : s' :@ CloseCurly : ts'
-    ) <$> compose indents ts
+compose indents (s :@ Right (SyntaxChar '{') : s' :@ Right (SyntaxChar '}') : ts) =
+    s :@ OpenCurly <:>
+    s' :@ CloseCurly <:>
+    compose indents ts
+
 compose indents (s :@ Right (SyntaxChar '}') : s' :@ Right (Indentation indent) : s'' :@ Right (SyntaxChar '}') : ts) = case checkIndentation indents indent of
-    Above -> (\ts' ->
-            s :@ OpenCurly : s'' :@ CloseCurly : ts'
-        ) <$> compose indents ts
-    Matching -> (\ts' ->
-            s :@ OpenCurly : s'' :@ CloseCurly : ts'
-        ) <$> compose indents ts
+    Above -> s :@ OpenCurly <:> s'' :@ CloseCurly <:> compose indents ts
+    Matching -> s :@ OpenCurly <:> s'' :@ CloseCurly <:> compose indents ts
     Invalid err -> raiseInit (show s' ++ " " ++ err)
-        >>= \poison_id -> (\ts' ->
-            s :@ OpenCurly : s'' :@ Error BadIndentationOnClosingCurly poison_id : ts'
-        ) <$> compose indents ts
+        >>= \poison_id -> 
+            s :@ OpenCurly <:>
+            s'' :@ Error BadIndentationOnClosingCurly poison_id <:>
+            compose indents ts
+
+
 -- start inline block
-compose indents (s :@ Right (SyntaxChar '{') : ts) = (s :@ OpenCurly :) <$> compose (Nothing : indents) ts
+compose indents (s :@ Right (SyntaxChar '{') : ts) = s :@ OpenCurly <:> compose (Nothing : indents) ts
+
+
 -- close a block
 compose (_ : indents) (s :@ Right (Indentation indent) : s' :@ Right (SyntaxChar '}') : ts) = case checkIndentation indents indent of
-    Above -> (s' :@ CloseCurly :) <$> compose indents ts
-    Matching -> (s' :@ CloseCurly :) <$> compose indents ts
+    Above    -> s' :@ CloseCurly <:> compose indents ts
+    Matching -> s' :@ CloseCurly <:> compose indents ts
     Invalid err -> raiseInit (show s ++ " " ++ err)
-        >>= \poison_id -> (s' :@ Error BadIndentationOnClosingCurly poison_id :) <$> compose indents ts
-compose (_ : indents) (s :@ Right (SyntaxChar '}') : ts) = (s :@ CloseCurly :) <$> compose indents ts
+        >>= \poison_id -> s' :@ Error BadIndentationOnClosingCurly poison_id <:> compose indents ts
+
+compose (_ : indents) (s :@ Right (SyntaxChar '}') : ts) = s :@ CloseCurly <:> compose indents ts
+
 compose [] (s :@ Right (SyntaxChar '}') : ts) = raiseInit (show s ++ " unbalanced curly bracket")
-    >>= \poison_id -> (s :@ Error UnbalancedClosingCurly poison_id :) <$> compose [] ts
+    >>= \poison_id -> s :@ Error UnbalancedClosingCurly poison_id <:> compose [] ts
+
+
 -- doc comments must be properly indented
 compose indents (s :@ Right (Indentation indent) : s' :@ Right (DocComment com) : ts) = case checkIndentation indents indent of
-    Above -> compose indents ts
-    Matching -> (s' :@ Documentation com :) <$> compose indents ts
+    Above    -> raiseInit (show s' ++ " floating documentation comment")
+        >>= \poison_id -> s' :@ Error ImproperDocumentation poison_id <:> compose indents ts
+    Matching -> s' :@ Documentation com <:> compose indents ts
     Invalid err -> raiseInit (show s ++ " " ++ err)
-        >>= \poison_id -> (s :@ Error BadIndentation poison_id :) <$> compose indents ts
-compose indents (_ :@ Right (DocComment _) : ts) = compose indents ts
+        >>= \poison_id -> s :@ Error BadIndentation poison_id <:> compose indents ts
+
+compose indents (s :@ Right (DocComment _) : ts) = raiseInit (show s ++ " documentation comment is not first item on line")
+        >>= \poison_id -> s :@ Error ImproperDocumentation poison_id <:> compose indents ts
+
+
 -- block item
 compose indents (s :@ Right (Indentation indent) : s' :@ Right (SnakeName name) : ts) = case checkIndentation indents indent of
     Above -> compose indents (s' :@ Right (SnakeName name) : ts)
     Matching -> if statementContinuationKeyWords & member name
-        then ((s <> s') :@ CurlyItemContinuationKeyword name :) <$> compose indents ts
-        else (s :@ CurlyItem :) <$> compose indents (s' :@ Right (SnakeName name) : ts)
+        then (s <> s') :@ CurlyItemContinuationKeyword name <:> compose indents ts
+        else s :@ CurlyItem <:> compose indents (s' :@ Right (SnakeName name) : ts)
     Invalid err -> raiseInit (show s ++ " " ++ err)
-        >>= \poison_id -> (s :@ Error BadIndentation poison_id :) <$> compose indents (s' :@ Right (SnakeName name) : ts)
+        >>= \poison_id -> s :@ Error BadIndentation poison_id <:> compose indents (s' :@ Right (SnakeName name) : ts)
+
 compose indents (s :@ Right (Indentation indent) : ts) = case checkIndentation indents indent of
-    Above -> compose indents ts
-    Matching -> (s :@ CurlyItem :) <$> compose indents ts
+    Above    ->                    compose indents ts
+    Matching -> s :@ CurlyItem <:> compose indents ts
     Invalid err -> raiseInit (show s ++ " " ++ err)
-        >>= \poison_id -> (s :@ Error BadIndentation poison_id :) <$> compose indents ts
+        >>= \poison_id -> s :@ Error BadIndentation poison_id <:> compose indents ts
+
+
 -- names and keywords
 compose indents (s :@ Right (SnakeName _) : s' :@ Right (PascalName _) : ts) =
     raiseInit (show (s <> s') ++ " snake and pascal names must be seperated by white space")
-    >>= \poison_id -> ((s <> s') :@ Error InsufficientSpacing poison_id :) <$> compose indents ts
+    >>= \poison_id -> (s <> s') :@ Error InsufficientSpacing poison_id <:> compose indents ts
+
 compose indents (s :@ Right (PascalName _) : s' :@ Right (SnakeName _) : ts) =
     raiseInit (show (s <> s') ++ " pascal and snake names must be seperated by white space")
-    >>= \poison_id -> ((s <> s') :@ Error InsufficientSpacing poison_id :) <$> compose indents ts
+    >>= \poison_id -> (s <> s') :@ Error InsufficientSpacing poison_id <:> compose indents ts
+
 compose indents (s :@ Right (SnakeName name) : ts)
-    | snakeKeyWords & member name = (s :@ Keyword name :) <$> compose indents ts
-    | otherwise                   = (s :@ Snake name   :) <$> compose indents ts
+    | snakeKeyWords & member name = s :@ Keyword name <:> compose indents ts
+    | otherwise                   = s :@ Snake name   <:> compose indents ts
+
 compose indents (s :@ Right (PascalName name) : ts)
-    | pascalKeyWords & member name = (s :@ Keyword name :) <$> compose indents ts
-    | otherwise                    = (s :@ Pascal name  :) <$> compose indents ts
+    | pascalKeyWords & member name = s :@ Keyword name <:> compose indents ts
+    | otherwise                    = s :@ Pascal name  <:> compose indents ts
+
 compose indents (s :@ Right (SymbolName name) : ts)
-    | specialOperators & member name = (s :@ SpecialOperator name :) <$> compose indents ts
-    | symbolicKeyWords & member name = (s :@ Keyword name         :) <$> compose indents ts
-    | otherwise                      = (s :@ Symbol name          :) <$> compose indents ts
+    | specialOperators & member name = s :@ SpecialOperator name <:> compose indents ts
+    | symbolicKeyWords & member name = s :@ Keyword name         <:> compose indents ts
+    | otherwise                      = s :@ Symbol name          <:> compose indents ts
+
 compose indents (s :@ Right HashDecorator : s' :@ Right (SnakeName name) : ts)
-    | decoratorKeyWords & member name = ((s <> s') :@ Decorator name :) <$> compose indents ts
+    | decoratorKeyWords & member name = (s <> s') :@ Decorator name <:> compose indents ts
     | otherwise                       = raiseInit (show s' ++ " invalid decorator")
-        >>= \poison_id -> ((s <> s') :@ Error InvalidDecorator poison_id :) <$> compose indents ts
+        >>= \poison_id -> (s <> s') :@ Error InvalidDecorator poison_id <:> compose indents ts
+
 compose indents (s :@ Right HashDecorator : ts) = raiseInit (show s ++ " incomplete decorator")
-    >>= \poison_id -> (s :@ Error IncompleteDecorator poison_id :) <$> compose indents ts 
+    >>= \poison_id -> s :@ Error IncompleteDecorator poison_id <:> compose indents ts 
+
+
 -- literals
 compose indents (s :@ Right (NumLit n) : s' :@ Right (SnakeName name) : ts)
     | snakeKeyWords & member name = raiseInit (show (s <> s') ++ " keyword cannot be a unit")
-        >>= \poison_id -> ((s <> s') :@ Error InvalidUseOfKeyword poison_id :) <$> compose indents ts
-    | otherwise = ((s <> s') :@ NaturalWithUnit n name :) <$> compose indents ts
-compose indents (s :@ Right (NumLit n) : ts) = (s :@ Natural n :) <$> compose indents ts
-compose indents (s :@ Right (StringLit str) : ts) = (s :@ StringLiteral str :) <$> compose indents ts
-compose indents (s :@ Right (CharLit ch) : ts) = (s :@ CharLiteral ch :) <$> compose indents ts
+        >>= \poison_id -> (s <> s') :@ Error InvalidUseOfKeyword poison_id <:> compose indents ts
+    | otherwise = (s <> s') :@ NaturalWithUnit n name <:> compose indents ts
+
+compose indents (s :@ Right (NumLit n) : ts)      = s :@ Natural n         <:> compose indents ts
+compose indents (s :@ Right (StringLit str) : ts) = s :@ StringLiteral str <:> compose indents ts
+compose indents (s :@ Right (CharLit ch) : ts)    = s :@ CharLiteral ch    <:> compose indents ts
+
+
 -- syntax
-compose indents (s :@ Right (SyntaxChar ',') : ts) = (s :@ Comma       :) <$> compose indents ts
-compose indents (s :@ Right (SyntaxChar ';') : ts) = (s :@ Semicolon   :) <$> compose indents ts
-compose indents (s :@ Right (SyntaxChar '(') : ts) = (s :@ OpenRound   :) <$> compose indents ts
-compose indents (s :@ Right (SyntaxChar ')') : ts) = (s :@ CloseRound  :) <$> compose indents ts
-compose indents (s :@ Right (SyntaxChar '[') : ts) = (s :@ OpenSquare  :) <$> compose indents ts
-compose indents (s :@ Right (SyntaxChar ']') : ts) = (s :@ CloseSquare :) <$> compose indents ts
+compose indents (s :@ Right (SyntaxChar ',') : ts) = s :@ Comma       <:> compose indents ts
+compose indents (s :@ Right (SyntaxChar ';') : ts) = s :@ Semicolon   <:> compose indents ts
+compose indents (s :@ Right (SyntaxChar '(') : ts) = s :@ OpenRound   <:> compose indents ts
+compose indents (s :@ Right (SyntaxChar ')') : ts) = s :@ CloseRound  <:> compose indents ts
+compose indents (s :@ Right (SyntaxChar '[') : ts) = s :@ OpenSquare  <:> compose indents ts
+compose indents (s :@ Right (SyntaxChar ']') : ts) = s :@ CloseSquare <:> compose indents ts
 compose _ (s :@ Right (SyntaxChar c)   : _ ) = internalFailure $ LexerIdentifiedIncorrectSyntax s c
+
+
 -- discards
 compose indents (_ :@ Right Comment : ts) = compose indents ts
--- eventually we might want to convert unclosed open curlys into zero width error tokens at the end
+
+
+-- eventually we *might* want to convert unclosed open curlys into zero width error tokens at the end
 compose _ [] = pure []
+
+
 -- error propogation
-compose indents (s :@ Left poison_id : ts) = (s :@ Error Malformed poison_id :) <$> compose indents ts
+compose indents (s :@ Left poison_id : ts) = s :@ Error Malformed poison_id <:> compose indents ts
 
 processLines :: EditorInfo -> [String] -> CompilerExcept [Spanned Token]
 processLines i ls = lexLines i ls >>= compose []
