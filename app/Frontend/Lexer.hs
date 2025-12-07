@@ -8,12 +8,12 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE LambdaCase #-}
 module Frontend.Lexer (
-    TokenIssue,
-    Token,
+    TokenIssue (..),
+    Token (..),
     processLines
 ) where
 
-import Data.Set (Set, fromList, member)
+import Data.Set (Set, fromList, member, isSubsetOf)
 import Data.Function ((&))
 import Data.Char (isUpper, isLower, isSpace, isAlphaNum)
 import Frontend (EditorInfo (..), widthOf)
@@ -332,8 +332,8 @@ snakeKeyWords = Data.Set.fromList [
         "par" -- linear dual of tuple for async environments
     ]
 
-statementContinuationKeyWords :: Set String
-statementContinuationKeyWords = Data.Set.fromList [
+statementKeyWords :: Set String
+statementKeyWords = Data.Set.fromList [
         "elif",
         "else",
         "catch",
@@ -371,13 +371,15 @@ symbolicKeyWords = Data.Set.fromList [
 -- cannot be overriden, has special precedent
 specialOperators :: Set String
 specialOperators = Data.Set.fromList [
-    -- numberic
+    -- inc / dec
+        "++",
+        "--",
+    -- addative
         "+",
         "-",
+    -- multplicative
         "*",
-        "/",
-        "++",
-        "--"
+        "/"
     ]
 
 decoratorKeyWords :: Set String
@@ -396,7 +398,7 @@ data TokenIssue
     | IncompleteDecorator
     | InvalidDecorator
     | ImproperDocumentation
-    deriving Show
+    deriving (Show, Eq)
 
 data Token
     = Keyword String
@@ -410,7 +412,7 @@ data Token
     | OpenCurly
     | CloseCurly
     | CurlyItem
-    | CurlyItemContinuationKeyword String
+    | CurlyItemKeyword String
     | Decorator String
     | Snake String
     | Pascal String
@@ -421,7 +423,31 @@ data Token
     | NaturalWithUnit Nat String
     | Documentation String
     | Error TokenIssue PoisonID
-    deriving Show
+    deriving Eq
+
+instance Show Token where
+    show (Keyword kw) = show kw
+    show (SpecialOperator op) = show op
+    show Comma       = show ","
+    show Semicolon   = show ";"
+    show OpenRound   = show "("
+    show CloseRound  = show ")"
+    show OpenSquare  = show "["
+    show CloseSquare = show "]"
+    show OpenCurly   = show "{"
+    show CloseCurly  = show "}"
+    show CurlyItem   = "aligned indentation"
+    show (CurlyItemKeyword kw) = "aligned " ++ show kw
+    show (Decorator kw) = show $ "[" ++ kw
+    show (Snake iden)   = show iden
+    show (Pascal iden)  = show iden
+    show (Symbol iden)  = show iden
+    show (StringLiteral str)      = show str
+    show (CharLiteral char)       = show char
+    show (Natural n)              = show $ show n
+    show (NaturalWithUnit n iden) = show $ show n ++ iden
+    show (Documentation doc) = show $ "#| " ++ doc
+    show (Error issue id) = show "error #" ++ show id ++ " " ++ show issue
 
 data IndentationLevel
     = Above
@@ -450,13 +476,6 @@ compose indents (_ :@ Right WhiteSpace : ts) = compose indents ts
 compose indents (s :@ Right (SyntaxChar c) : _ :@ Right WhiteSpace : ts) = compose indents (s :@ Right (SyntaxChar c) : ts)
 
 
--- start multi-line block
-compose indents (s :@ Right (SyntaxChar '{') : s' :@ Right (Indentation indent) : ts) =
-    s :@ OpenCurly <:>
-    endPoint s' :@ CurlyItem <:>
-    compose (Just indent : indents) ts
-
-
 -- empty block
 compose indents (s :@ Right (SyntaxChar '{') : s' :@ Right (SyntaxChar '}') : ts) =
     s :@ OpenCurly <:>
@@ -471,6 +490,13 @@ compose indents (s :@ Right (SyntaxChar '}') : s' :@ Right (Indentation indent) 
             s :@ OpenCurly <:>
             s'' :@ Error BadIndentationOnClosingCurly poison_id <:>
             compose indents ts
+
+
+-- start multi-line block
+compose indents (s :@ Right (SyntaxChar '{') : s' :@ Right (Indentation indent) : ts) =
+    s :@ OpenCurly <:>
+    endPoint s' :@ CurlyItem <:>
+    compose (Just indent : indents) ts
 
 
 -- start inline block
@@ -505,15 +531,15 @@ compose indents (s :@ Right (DocComment _) : ts) = raiseInit (show s ++ " docume
 -- block item
 compose indents (s :@ Right (Indentation indent) : s' :@ Right (SnakeName name) : ts) = case checkIndentation indents indent of
     Above -> compose indents (s' :@ Right (SnakeName name) : ts)
-    Matching -> if statementContinuationKeyWords & member name
-        then (s <> s') :@ CurlyItemContinuationKeyword name <:> compose indents ts
-        else s :@ CurlyItem <:> compose indents (s' :@ Right (SnakeName name) : ts)
+    Matching -> if statementKeyWords & member name
+        then (s <> s') :@ CurlyItemKeyword name <:> compose indents ts
+        else endPoint s :@ CurlyItem <:> compose indents (s' :@ Right (SnakeName name) : ts)
     Invalid err -> raiseInit (show s ++ " " ++ err)
         >>= \poison_id -> s :@ Error BadIndentation poison_id <:> compose indents (s' :@ Right (SnakeName name) : ts)
 
 compose indents (s :@ Right (Indentation indent) : ts) = case checkIndentation indents indent of
     Above    ->                    compose indents ts
-    Matching -> s :@ CurlyItem <:> compose indents ts
+    Matching -> endPoint s :@ CurlyItem <:> compose indents ts
     Invalid err -> raiseInit (show s ++ " " ++ err)
         >>= \poison_id -> s :@ Error BadIndentation poison_id <:> compose indents ts
 
@@ -567,6 +593,7 @@ compose indents (s :@ Right (SyntaxChar '(') : ts) = s :@ OpenRound   <:> compos
 compose indents (s :@ Right (SyntaxChar ')') : ts) = s :@ CloseRound  <:> compose indents ts
 compose indents (s :@ Right (SyntaxChar '[') : ts) = s :@ OpenSquare  <:> compose indents ts
 compose indents (s :@ Right (SyntaxChar ']') : ts) = s :@ CloseSquare <:> compose indents ts
+
 compose _ (s :@ Right (SyntaxChar c)   : _ ) = internalFailure $ LexerIdentifiedIncorrectSyntax s c
 
 
@@ -582,4 +609,9 @@ compose _ [] = pure []
 compose indents (s :@ Left poison_id : ts) = s :@ Error Malformed poison_id <:> compose indents ts
 
 processLines :: EditorInfo -> [String] -> CompilerExcept [Spanned Token]
-processLines i ls = lexLines i ls >>= compose []
+processLines i ls = do
+    pre_ts <- lexLines i ls
+    if statementKeyWords `isSubsetOf` snakeKeyWords
+        then pure ()
+        else internalFailure StatementKeyWordsAreNotSnakeKeyWords
+    compose [] pre_ts

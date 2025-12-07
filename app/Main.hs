@@ -9,7 +9,9 @@ module Main (
 ) where
 import Frontend (readLines, EditorInfo (..))
 import Frontend.Lexer (processLines)
+import Frontend.Main (parseFile)
 import Reporting (runReporter)
+import Frontend.Parser (exampleParser)
 
 debugEditor :: EditorInfo
 debugEditor = EditorInfo {
@@ -19,18 +21,13 @@ debugEditor = EditorInfo {
 
 main :: IO ()
 main = do
-    putStrLn "what file should I lex?"
+    putStrLn "what file should I parse?"
     path <- getLine
-    ls <- readLines path
-    
-    -- let (except', events') = runReporter $ debugLexLines debugEditor ls
-    -- () <$ mapM print events'
-    -- case except' of
-    --     Left fatal -> putStrLn "internal compiler error" >> print fatal
-    --     Right ls' -> () <$ mapM print ls'
-
-    let (except, events) = runReporter $ processLines debugEditor ls
+    res <- parseFile debugEditor path exampleParser
+    let (except, events) = runReporter res
     () <$ mapM print events
     case except of
         Left fatal -> putStrLn "internal compiler error" >> print fatal
-        Right ls' -> () <$ mapM print ls'
+        Right (Left err) -> putStrLn "parse error" >> print err
+        Right (Right x) -> print x
+

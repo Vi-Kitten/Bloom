@@ -46,6 +46,7 @@ data InternalCompilerError
     = InferenceKeyError
     | KindTrackingError
     | LexerIdentifiedIncorrectSyntax Span Char
+    | StatementKeyWordsAreNotSnakeKeyWords
     deriving Show
 
 type CompilerExcept = ExceptT InternalCompilerError PoisonService
