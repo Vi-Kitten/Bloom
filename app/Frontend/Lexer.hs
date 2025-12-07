@@ -270,6 +270,7 @@ snakeKeyWords = Data.Set.fromList [
         "pure",
     -- general
         "_", -- discard
+        "partial",
         "def",
         "where",
         "for",
@@ -294,6 +295,8 @@ snakeKeyWords = Data.Set.fromList [
         "pattern",
     -- control flow
         "let",
+        "while",
+        "loop",
         "do",
         "with",
         "match",
@@ -351,6 +354,7 @@ symbolicKeyWords = Data.Set.fromList [
     -- equation syntax
         ".",
         "?",
+        "?.",
         "=",
         "?=",
         "=>",
@@ -371,15 +375,15 @@ symbolicKeyWords = Data.Set.fromList [
 -- cannot be overriden, has special precedent
 specialOperators :: Set String
 specialOperators = Data.Set.fromList [
-    -- inc / dec
-        "++",
-        "--",
     -- addative
         "+",
         "-",
     -- multplicative
         "*",
-        "/"
+        "/",
+    -- logical
+        "==",
+        "!="
     ]
 
 decoratorKeyWords :: Set String
@@ -514,6 +518,20 @@ compose (_ : indents) (s :@ Right (SyntaxChar '}') : ts) = s :@ CloseCurly <:> c
 
 compose [] (s :@ Right (SyntaxChar '}') : ts) = raiseInit (show s ++ " unbalanced curly bracket")
     >>= \poison_id -> s :@ Error UnbalancedClosingCurly poison_id <:> compose [] ts
+
+
+-- non-starters
+compose indents (s :@ Right (Indentation indent) : s' :@ Right (SyntaxChar ']') : ts) = case checkIndentation indents indent of
+    Above    -> s' :@ CloseSquare <:> compose indents ts
+    Matching -> s' :@ CloseSquare <:> compose indents ts
+    Invalid err -> raiseInit (show s ++ " " ++ err)
+        >>= \poison_id -> s :@ Error BadIndentation poison_id <:> compose indents ts
+
+compose indents (s :@ Right (Indentation indent) : s' :@ Right (SyntaxChar ')') : ts) = case checkIndentation indents indent of
+    Above    -> s' :@ CloseRound <:> compose indents ts
+    Matching -> s' :@ CloseRound <:> compose indents ts
+    Invalid err -> raiseInit (show s ++ " " ++ err)
+        >>= \poison_id -> s :@ Error BadIndentation poison_id <:> compose indents ts
 
 
 -- doc comments must be properly indented

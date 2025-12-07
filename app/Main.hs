@@ -11,7 +11,7 @@ import Frontend (readLines, EditorInfo (..))
 import Frontend.Lexer (processLines)
 import Frontend.Main (parseFile)
 import Reporting (runReporter)
-import Frontend.Parser (exampleParser)
+import Frontend.Parser (expr, curlyItem)
 
 debugEditor :: EditorInfo
 debugEditor = EditorInfo {
@@ -23,7 +23,7 @@ main :: IO ()
 main = do
     putStrLn "what file should I parse?"
     path <- getLine
-    res <- parseFile debugEditor path exampleParser
+    res <- parseFile debugEditor path $ curlyItem *> expr
     let (except, events) = runReporter res
     () <$ mapM print events
     case except of

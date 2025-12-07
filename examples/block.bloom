@@ -1,0 +1,24 @@
+{
+    let xy |: xys = xys
+    let mut xs = []
+    let mut ys = []
+
+    # accumulate seperately
+    xys.iter fn
+        | Both x y => {
+            xs.push x
+            ys.push y
+        }
+        | Left x   => xs.push x
+        | Right y  => ys.push y
+
+    # handle start
+    match xy with
+        | Both x y => Both (x |: xs) (y |: ys)
+        | Left x   => if ys.as_nonempty is Some ys
+            do Both (x |: xs) ys
+            else Left (x |: xs)
+        | Right y  => if xs.as_nonempty is Some xs
+            do Both xs (y |: ys)
+            else Right (y |: ys)
+}

@@ -7,6 +7,7 @@ module Utils (
     (.&),
     (..&),
     (...&),
+    (&>),
     associateLeft,
     associateRight,
     associateLeft',
@@ -14,6 +15,8 @@ module Utils (
     AlternatingListSep (..),
     AlternatingList (..),
     (+-),
+    fences,
+    posts,
     (<:>),
     Or (..),
     pattern OrLeft,
@@ -39,6 +42,7 @@ import Data.Bifunctor (Bifunctor (..))
 import Data.Functor ((<&>))
 import Data.List.NonEmpty (NonEmpty (..), cons, nonEmpty)
 import Data.Maybe (mapMaybe, fromMaybe)
+import Data.Function ((&))
 
 infix 1 .&
 infix 1 ..&
@@ -51,6 +55,11 @@ infix 1 ...&
 (.&)   (x, y) f       = f x y
 (..&)  (x, y, z) f    = f x y z
 (...&) (x, y, z, w) f = f x y z w
+
+infixl 4 &>
+
+(&>) :: Applicative f => f a -> f (a -> b) -> f b
+(&>) fx ff = (&) <$> fx <*> ff
 
 infixr 5 :+
 
@@ -72,18 +81,20 @@ bindAlternatingList :: AlternatingList s a -> (a -> AlternatingList s b) -> Alte
 bindAlternatingList (End x)         f = f x
 bindAlternatingList (x :- y :+ xys) f = f x +- y :+ bindAlternatingList xys f
 
-associateLeft' :: (a -> b) -> (s -> a -> b -> b) -> AlternatingList s a -> b
-associateLeft' rgh _           (End a) = rgh a
-associateLeft' rgh sep (x :- y :+ xys) = sep y x (associateLeft' rgh sep xys)
+associateLeft' :: (a -> b) -> (b -> s -> a -> b) -> AlternatingList s a -> b
+associateLeft' lft _           (End x) = lft x
+associateLeft' lft sep (x :- y :+ xys) =
+    let sx = lft x in
+        associateLeft' (sep sx y) sep xys
 
-associateRight' :: (a -> b) -> (s -> b -> a -> b) -> AlternatingList s a -> b
-associateRight' lft _           (End a) = lft a
-associateRight' lft sep (x :- y :+ xys) = associateRight' (sep y (lft x)) sep xys
+associateRight' :: (a -> b) -> (a -> s -> b -> b) -> AlternatingList s a -> b
+associateRight' rgh _           (End x) = rgh x
+associateRight' rgh sep (x :- y :+ xys) = sep x y $ associateRight' rgh sep xys
 
-associateLeft :: (s -> a -> a -> a) -> AlternatingList s a -> a
+associateLeft :: (a -> s -> a -> a) -> AlternatingList s a -> a
 associateLeft = associateLeft' id
 
-associateRight :: (s -> a -> a -> a) -> AlternatingList s a -> a
+associateRight :: (a -> s -> a -> a) -> AlternatingList s a -> a
 associateRight = associateRight' id
 
 instance Functor (AlternatingListSep s) where
@@ -106,6 +117,14 @@ instance Applicative (AlternatingList s) where
 
 instance Monad (AlternatingList s) where
     (>>=) = bindAlternatingList
+
+fences :: AlternatingList a b -> [a]
+fences (_ :- y :+ xys) = y : fences xys
+fences (End _) = []
+
+posts :: AlternatingList a b -> NonEmpty b
+posts (x :- _ :+ xys) = cons x (posts xys)
+posts (End x) = x :| []
 
 infixr 5 <:>
 
