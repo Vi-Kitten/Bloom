@@ -14,6 +14,6 @@ executable bloom
     import:           warnings
     main-is:          Main.hs
     other-modules:    Utils, Frontend, Frontend.Lexer, Frontend.Spanned, Frontend.Parser, Frontend.Main, Inference, Typing, Reporting
-    build-depends:    containers, text, free, pipes, transformers, mtl, mmorph, base
+    build-depends:    extra, extra, containers, text, free, pipes, transformers, mtl, mmorph, base
     hs-source-dirs:   app
     default-language: Haskell2010

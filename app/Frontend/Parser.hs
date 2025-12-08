@@ -154,13 +154,27 @@ curlyItem = Step "matching indentation" $ \case
     CurlyItem -> Just ()
     _ -> Nothing
 
-recovCurlyItem :: Parser a -> Parser (Either PoisonID a)
-recovCurlyItem px = curlyItem *> Recov
-    (id <$ most (Step "[ERROR : THIS MESSAGE SHOULD NOT BE VISIBLE]" $ \case
+simpleSkipItem = most (Step "" $ \case
         CurlyItem -> Nothing
+        OpenCurly -> Nothing
         CloseCurly -> Nothing
         _ -> Just ()
-    )) px
+    )
+
+simpleSkipBlock = most (Step "" $ \case
+        OpenCurly -> Nothing
+        CloseCurly -> Nothing
+        _ -> Just ()
+    )
+
+skipItem :: Parser ()
+skipItem = () <$ mostPostsSeperated skipBlock simpleSkipItem
+
+skipBlock :: Parser ()
+skipBlock = openCurly *> mostPostsSeperated skipBlock simpleSkipBlock *> closeCurly
+
+recovCurlyItem :: Parser a -> Parser (Either PoisonID a)
+recovCurlyItem px = curlyItem *> Recov (id <$ skipItem) px
 
 curlyKeyword kw = equal (CurlyItemKeyword kw)
 
