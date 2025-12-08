@@ -19,6 +19,8 @@ import Frontend.Spanned (Span)
 import Control.Monad.State (StateT, get, put, runStateT)
 import Control.Monad.Writer (Writer, tell)
 import GHC.TypeLits (Nat)
+import Data.Function ((&))
+import Data.List.NonEmpty (nonEmpty, NonEmpty (..))
 
 type PoisonID = Nat
 
@@ -28,7 +30,12 @@ data PoisonEvent = PoisonEvent {
     causes :: [PoisonID],
     poison :: PoisonID,
     reason :: CompilationError
-} deriving Show
+}
+
+instance Show PoisonEvent where
+    show pe = case pe & causes & nonEmpty of
+        Nothing -> "#" ++ show (pe & poison) ++ " " ++ (pe & reason)
+        Just (c :| cs) -> ("#" ++ show c) ++ (cs >>= \c' -> ", #" ++ show c') ++ " => #" ++ show (pe & poison) ++ " " ++ (pe & reason)
 
 type PoisonService = StateT PoisonID (Writer [PoisonEvent])
 

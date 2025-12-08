@@ -4,6 +4,7 @@
 {-# LANGUAGE ViewPatterns #-}
 
 module Utils (
+    len,
     (.&),
     (..&),
     (...&),
@@ -43,6 +44,10 @@ import Data.Functor ((<&>))
 import Data.List.NonEmpty (NonEmpty (..), cons, nonEmpty)
 import Data.Maybe (mapMaybe, fromMaybe)
 import Data.Function ((&))
+import GHC.Natural (Natural)
+
+len :: (Foldable f) => f a -> Natural
+len = foldr (const (+ 1)) 0
 
 infix 1 .&
 infix 1 ..&

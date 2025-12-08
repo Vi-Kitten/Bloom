@@ -25,7 +25,7 @@ module Frontend.Parser (
 import Data.Kind (Type)
 
 import Frontend.Lexer (Token (..))
-import Frontend.Spanned (Spanned (..))
+import Frontend.Spanned (Spanned (..), TextPos, spanEnd)
 import Control.Arrow ((>>>))
 import Data.Function (on, (&))
 import Data.List.NonEmpty (NonEmpty (..), last, init, toList)
@@ -72,33 +72,33 @@ munch stok (Then pf px) = pf & munch stok >>= \case
         Accepted px' -> Accepted $ (<$>) <$> f <*> px'
     Accepted pf' -> Right (Accepted $ pf' <&> (`Then` px))
 munch (s :@ tok) (Recov pr px) = pr & munch (s :@ tok) <&> \case
-    Already recov -> Already $ case px & close of
+    Already recov -> Already $ case px & close (spanEnd s) of
         Left exs -> do
-            poison_id <- raiseInit "WIP MESSAGE"
+            poison_id <- raiseInit $ show $ UnexpectedEOS (spanEnd s) exs
             (Left poison_id &) <$> recov
         Right x  -> recov <*> (Right <$> x)
     Accepted pr' -> Accepted $ case px & munch (s :@ tok) of
         Left exs             -> do
-            poison_id <- raiseInit "WIP MESSAGE"
+            poison_id <- raiseInit $ show $ ExpectedFound (s :@ tok) exs
             fmap (Left poison_id &) <$> pr'
         Right (Already _)    -> do
-            poison_id <- raiseInit "WIP MESSAGE"
+            poison_id <- raiseInit $ show $ Unexpected (s :@ tok)
             fmap (Left poison_id &) <$> pr'
         Right (Accepted px') -> Recov <$> pr' <*> px'
 
-close :: Parser a -> Either (NonEmpty ParseExpectation) (CompilerExcept a)
-close (Step ex _) = Left $ ex :| []
-close (Pure x) = Right $ pure x
-close (Alt px py) = close px <+> close py
-close (Then pf px) = (<*>) <$> close pf <*> close px
-close (Recov pr px) = close pr <&> \recov -> case px & close of
+close :: TextPos -> Parser a -> Either (NonEmpty ParseExpectation) (CompilerExcept a)
+close _ (Step ex _) = Left $ ex :| []
+close _    (Pure x) = Right $ pure x
+close final   (Alt px py) = close final px <+> close final py
+close final  (Then pf px) = (<*>) <$> close final pf <*> close final px
+close final (Recov pr px) = close final pr <&> \recov -> case px & close final of
     Left exs -> do
-        poison_id <- raiseInit "WIP MESSAGE"
+        poison_id <- raiseInit $ show $ UnexpectedEOS final exs
         (Left poison_id &) <$> recov
     Right x -> x >>= \x' -> (Right x' &) <$> recov
 
 data ParseError
-    = UnexpectedEOF (NonEmpty ParseExpectation)
+    = UnexpectedEOS TextPos (NonEmpty ParseExpectation)
     | ExpectedFound (Spanned Token) (NonEmpty ParseExpectation)
     | Unexpected (Spanned Token)
 
@@ -107,16 +107,16 @@ expectation (ex :| []) = ex
 expectation exs = (Data.List.NonEmpty.init exs >>= \ex -> ex ++ ", ") ++ "or " ++ Data.List.NonEmpty.last exs
 
 instance Show ParseError where
-    show (UnexpectedEOF exs) = "Expected " ++ expectation exs
+    show (UnexpectedEOS pos exs) = "Expected " ++ expectation exs ++ " at " ++ show pos
     show (ExpectedFound (s :@ tok) exs) = "Expected " ++ expectation exs ++ " found " ++ show tok ++ " at " ++ show s
     show (Unexpected (s :@ tok)) = "Unexpected token " ++ show tok ++ " at " ++ show s
 
-parse :: [Spanned Token] -> Parser a -> CompilerExcept (Either ParseError a)
-parse []                px = sequenceA $ first UnexpectedEOF $ close px
-parse (s :@ tok : toks) px = case px & munch (s :@ tok) of
+parse :: TextPos -> [Spanned Token] -> Parser a -> CompilerExcept (Either ParseError a)
+parse final []                px = sequenceA $ first (UnexpectedEOS final) $ close final px
+parse final (s :@ tok : toks) px = case px & munch (s :@ tok) of
     Left exs -> return $ Left (ExpectedFound (s :@ tok) exs)
     Right (Already _) -> return $ Left (Unexpected (s :@ tok))
-    Right (Accepted px') -> px' >>= parse toks
+    Right (Accepted px') -> px' >>= parse final toks
 
 equal :: Token -> Parser ()
 equal tok = Step (show tok) $ \tok' -> if tok' == tok
@@ -153,6 +153,14 @@ openCurly = equal OpenCurly
 curlyItem = Step "matching indentation" $ \case
     CurlyItem -> Just ()
     _ -> Nothing
+
+recovCurlyItem :: Parser a -> Parser (Either PoisonID a)
+recovCurlyItem px = curlyItem *> Recov
+    (id <$ most (Step "[ERROR : THIS MESSAGE SHOULD NOT BE VISIBLE]" $ \case
+        CurlyItem -> Nothing
+        CloseCurly -> Nothing
+        _ -> Just ()
+    )) px
 
 curlyKeyword kw = equal (CurlyItemKeyword kw)
 
@@ -249,7 +257,7 @@ data Expr
     | Member String Expr
     | Call Expr Expr
     | PartialCall Expr Expr -- skip the first arg
-    | Block [BlockStatement]
+    | Block [Either PoisonID BlockStatement]
     | Array [Expr]
     | If Expr Action Action
     | IfIs (Matcher Pattern) Expr Action Action
@@ -320,7 +328,7 @@ compactExpr :: Parser Expr
 compactExpr = alt $ (Undefined <$ keyword "...") :| [
         UseIden <$> snake,
         Ctor <$> pascal,
-        openCurly *> (Block <$> most (curlyItem *> blockStmt)) <* closeCurly,
+        openCurly *> (Block <$> most (recovCurlyItem blockStmt)) <* closeCurly,
         openRound *> optDefault Unit expr <* closeRound,
         openSquare *> Alt (Array [] <$ closeSquare) ((toList >>> Array) <$> mostPostsSeperated (keyword ",") expr <* closeSquare)
     ]
@@ -459,7 +467,7 @@ loopingFlow stmt = alt $ forIn stmt :| [
     ]
 
 labelPattern :: Parser (String, [Pattern])
-labelPattern = (,) <$> label <*> most compactPattern 
+labelPattern = (,) <$> label <*> most compactPattern
 
 switchGaurd :: Parser SwitchGaurd
 switchGaurd = SwitchGaurd <$> (keyword "|" *> matcher labelPattern) <*> (keyword "=>" *> action)

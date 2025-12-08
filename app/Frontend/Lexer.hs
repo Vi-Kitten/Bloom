@@ -15,15 +15,15 @@ module Frontend.Lexer (
 
 import Data.Set (Set, fromList, member, isSubsetOf)
 import Data.Function ((&))
-import Data.Char (isUpper, isLower, isSpace, isAlphaNum)
+import Data.Char (isUpper, isLower, isAlphaNum)
 import Frontend (EditorInfo (..), widthOf)
 import GHC.TypeLits (Nat)
 import Control.Arrow ((>>>))
 import Data.Functor ((<&>))
 import Control.Monad (join)
-import Reporting (PoisonID, CompilerExcept, raise, raiseInit, internalFailure, InternalCompilerError (..))
+import Reporting (PoisonID, CompilerExcept, raiseInit, internalFailure, InternalCompilerError (..))
 import Data.Maybe (mapMaybe)
-import Frontend.Spanned (Spanned (..), Span (..), TextPos (..), startPoint, endPoint)
+import Frontend.Spanned (Spanned (..), Span (..), TextPos (..), endPoint)
 import Data.List (isPrefixOf)
 import Utils ((<:>))
 
@@ -240,9 +240,6 @@ lexLine i line_number line_txt = do
 lexLines :: EditorInfo -> [String] -> CompilerExcept [Spanned (Either PoisonID PreToken)]
 lexLines i lines_txt = sequence [ lexLine i n line_txt | (n, line_txt) <- zip [0..] lines_txt] <&> join
 
-debugLexLines :: EditorInfo -> [String] -> CompilerExcept [String]
-debugLexLines i lines_txt = lexLines i lines_txt <&> fmap show
-
 pascalKeyWords :: Set String
 pascalKeyWords = Data.Set.fromList [
     -- datatypes
@@ -447,11 +444,11 @@ instance Show Token where
     show (Pascal iden)  = show iden
     show (Symbol iden)  = show iden
     show (StringLiteral str)      = show str
-    show (CharLiteral char)       = show char
+    show (CharLiteral charecter)  = show charecter
     show (Natural n)              = show $ show n
     show (NaturalWithUnit n iden) = show $ show n ++ iden
     show (Documentation doc) = show $ "#| " ++ doc
-    show (Error issue id) = show "error #" ++ show id ++ " " ++ show issue
+    show (Error issue poison_id) = show "error #" ++ show poison_id ++ " " ++ show issue
 
 data IndentationLevel
     = Above

@@ -4,6 +4,8 @@ module Frontend.Spanned (
     Spanned (..),
     coalesceWith,
     coalesce,
+    spanStart,
+    spanEnd,
     startPoint,
     endPoint
 ) where
