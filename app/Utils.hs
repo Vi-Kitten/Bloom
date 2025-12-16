@@ -5,6 +5,8 @@
 
 module Utils (
     len,
+    firstIn,
+    lastIn,
     (.&),
     (..&),
     (...&),
@@ -45,9 +47,17 @@ import Data.List.NonEmpty (NonEmpty (..), cons, nonEmpty)
 import Data.Maybe (mapMaybe, fromMaybe)
 import Data.Function ((&))
 import GHC.Natural (Natural)
+import Control.Applicative ((<|>))
+import Control.Arrow ((>>>))
 
 len :: (Foldable f) => f a -> Natural
 len = foldr (const (+ 1)) 0
+
+firstIn :: (Foldable f) => f a -> Maybe a
+firstIn = foldr (Just >>> (<|>)) Nothing
+
+lastIn :: (Foldable f) => f a -> Maybe a
+lastIn = foldr (Just >>> flip (<|>)) Nothing
 
 infix 1 .&
 infix 1 ..&

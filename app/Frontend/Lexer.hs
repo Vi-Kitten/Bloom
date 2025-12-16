@@ -178,8 +178,8 @@ pascalMatcher c
     | otherwise = Left "uppercase charecter"
     where
         pascalBodyMatcher :: Matcher String
-        pascalBodyMatcher c
-            | isAlphaNum c = Right $ Continue (Just [c]) $ mapMatcher (c :) pascalBodyMatcher
+        pascalBodyMatcher c'
+            | isAlphaNum c' = Right $ Continue (Just [c']) $ mapMatcher (c' :) pascalBodyMatcher
             | otherwise    = Left "alphanumberic charecter"
 
 -- general purpose matcher thing for `#` syntax
@@ -258,13 +258,15 @@ snakeKeyWords = Data.Set.fromList [
         "as",
         "all",
     -- modifiers
+        "shared",
+        "fixed",
         "static",
         "move",
-        "inout",
         "mut",
         "pin",
         "ref",
         "pure",
+        "unpin",
     -- general
         "_", -- discard
         "partial",
@@ -314,6 +316,8 @@ snakeKeyWords = Data.Set.fromList [
         "try",
         "catch",
     -- reservations
+        "const",
+        "inout",
         "class",
         "inherit",
         "mixin",
@@ -363,6 +367,9 @@ symbolicKeyWords = Data.Set.fromList [
         "@", -- jump label
         "...", -- typed hole
     -- reservations
+        "!",
+        "?!",
+        "!?",
         "<-",
         "<:", -- subtyping
         "|=", -- implicit tuple (dual to =>) for example: dyn[N] Num N |= N
@@ -427,7 +434,7 @@ data Token
     deriving Eq
 
 instance Show Token where
-    show (Keyword kw) = show kw
+    show (Keyword kw) = "keyword " ++ show kw
     show (SpecialOperator op) = show op
     show Comma       = show ","
     show Semicolon   = show ";"
@@ -443,8 +450,8 @@ instance Show Token where
     show (Snake iden)   = show iden
     show (Pascal iden)  = show iden
     show (Symbol iden)  = show iden
-    show (StringLiteral str)      = show str
-    show (CharLiteral charecter)  = show charecter
+    show (StringLiteral str)      = "string " ++ show str
+    show (CharLiteral charecter)  = "charecter " ++ show charecter
     show (Natural n)              = show $ show n
     show (NaturalWithUnit n iden) = show $ show n ++ iden
     show (Documentation doc) = show $ "#| " ++ doc
@@ -561,11 +568,11 @@ compose indents (s :@ Right (Indentation indent) : ts) = case checkIndentation i
 
 -- names and keywords
 compose indents (s :@ Right (SnakeName _) : s' :@ Right (PascalName _) : ts) =
-    raiseInit (show (s <> s') ++ " snake and pascal names must be seperated by white space")
+    raiseInit (show (s <> s') ++ " snake case names cannot contain capitals")
     >>= \poison_id -> (s <> s') :@ Error InsufficientSpacing poison_id <:> compose indents ts
 
 compose indents (s :@ Right (PascalName _) : s' :@ Right (SnakeName _) : ts) =
-    raiseInit (show (s <> s') ++ " pascal and snake names must be seperated by white space")
+    raiseInit (show (s <> s') ++ " pascal case names cannot contain underscores")
     >>= \poison_id -> (s <> s') :@ Error InsufficientSpacing poison_id <:> compose indents ts
 
 compose indents (s :@ Right (SnakeName name) : ts)

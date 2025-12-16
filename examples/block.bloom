@@ -1,5 +1,11 @@
 {
-    let xy |: xys = xys
+    let lst = []
+        |+ Left  0
+        |+ Both  1 'a'
+        |+ Right   'b'
+        :+ Both  2 'c'
+
+    let xys :+ xy = lst
     let mut xs = []
     let mut ys = []
 
@@ -12,13 +18,13 @@
         | Left x   => xs.push x
         | Right y  => ys.push y
 
-    # handle start
+    # handle end
     match xy with
-        | Both x y => Both (x |: xs) (y |: ys)
+        | Both x y => Both (xs :+ x) (ys :+ y)
         | Left x   => if ys.as_nonempty is Some ys
-            do Both (x |: xs) ys
-            else Left (x |: xs)
+            do Both (xs :+ x) ys
+            else Left (xs :+ x)
         | Right y  => if xs.as_nonempty is Some xs
-            do Both xs (y |: ys)
-            else Right (y |: ys)
+            do Both xs (ys :+ y)
+            else Right (ys :+ y)
 }

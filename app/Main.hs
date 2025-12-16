@@ -9,9 +9,9 @@ module Main (
     main
 ) where
 import Frontend (readLines, EditorInfo (..))
-import Frontend.Main (parseFile)
+import Frontend.Main (parseFile, lexFile)
 import Reporting (runReporter)
-import Frontend.Parser (expr, curlyItem)
+import Frontend.Parser (parse, expr, curlyItem)
 
 debugEditor :: EditorInfo
 debugEditor = EditorInfo {
@@ -23,10 +23,19 @@ main :: IO ()
 main = do
     putStrLn "what file should I parse?"
     path <- getLine
-    res <- parseFile debugEditor path $ curlyItem *> expr
-    let (except, events) = runReporter res
+    (end, mtoks) <- lexFile debugEditor path
+    let (except, events) = runReporter $ do
+            toks <- mtoks
+            res <- parse end toks $ curlyItem *> expr
+            return (toks, res)
     () <$ mapM print events
     case except of
         Left fatal -> putStrLn "internal compiler error" >> print fatal
-        Right (Left err) -> putStrLn "parse error" >> print err
-        Right (Right x) -> print x
+        Right (toks, Left err) -> putStrLn "tokens"
+            >> sequenceA [print tok | tok <- toks]
+            >> putStrLn "parse error"
+            >> print err
+        Right (toks, Right x) -> putStrLn "tokens"
+            >> sequenceA [print tok | tok <- toks]
+            >> putStrLn "parse success"
+            >> print x

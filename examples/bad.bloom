@@ -1,3 +1,7 @@
 def bad = foo `improper_syntax` bar
 
 def worse = "this is an unclosed string
+
+incorrectSmallName
+
+Incorrect_Big_Name
