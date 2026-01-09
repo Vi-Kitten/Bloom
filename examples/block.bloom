@@ -1,4 +1,4 @@
-{
+def example = {
     let lst = []
         |+ Left  0
         |+ Both  1 'a'

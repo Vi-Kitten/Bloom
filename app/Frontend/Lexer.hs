@@ -161,7 +161,7 @@ symbolMatcher = mapMatcher SymbolName symbolMatcherInner
         symbolMatcherInner :: Matcher String
         symbolMatcherInner c
             | symbolicCharecters & member c = Right $ Continue (Just [c]) $ mapMatcher (c :) symbolMatcherInner
-            | otherwise                     = Left "symbolic charecter (one of \"!$%^&*-+=:@~|<>?./\")"
+            | otherwise                     = Left "symbolic charecter (one of \"¬!$%^&*-+=:@~|<>?./\")"
 
 snakeMatcher :: Matcher PreToken
 snakeMatcher = mapMatcher SnakeName snakeMatcherInner
@@ -258,8 +258,6 @@ snakeKeyWords = Data.Set.fromList [
         "as",
         "all",
     -- modifiers
-        "shared",
-        "fixed",
         "static",
         "move",
         "mut",
@@ -269,6 +267,7 @@ snakeKeyWords = Data.Set.fromList [
         "unpin",
     -- general
         "_", -- discard
+        "then",
         "partial",
         "def",
         "where",
@@ -280,13 +279,11 @@ snakeKeyWords = Data.Set.fromList [
         "or",
         "todo", -- leave undefined
     -- datatypes
-        "enum",
+        "data",
         "case",
-        "struct",
     -- abstractions
         "self",
         "interface",
-        "trait",
         "impl",
         "derive",
         "is",
@@ -294,8 +291,6 @@ snakeKeyWords = Data.Set.fromList [
         "pattern",
     -- control flow
         "let",
-        "while",
-        "loop",
         "do",
         "with",
         "match",
@@ -310,16 +305,24 @@ snakeKeyWords = Data.Set.fromList [
         "yield",
         "break",
         "continue",
-        "nobreak",
+        "end",
         "pass", -- placeholder action
         "throw",
         "try",
         "catch",
     -- reservations
+        "enum",
+        "struct",
+        "while",
+        "loop",
+        "trait",
+        "fixed",
+        "shared",
         "const",
         "inout",
         "class",
         "inherit",
+        "nobreak",
         "mixin",
         "extend",
         "open",
@@ -373,7 +376,9 @@ symbolicKeyWords = Data.Set.fromList [
         "<-",
         "<:", -- subtyping
         "|=", -- implicit tuple (dual to =>) for example: dyn[N] Num N |= N
-        "~" -- linear consumer type, like T -* Unit for async environments
+        "~",  -- linear consumer type, like T -* Unit for async environments
+        "¬",  -- negation type (function to empty)
+        "¬¬"  -- consistency type (double negation)
     ]
 
 -- cannot be overriden, has special precedent

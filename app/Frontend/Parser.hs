@@ -19,8 +19,18 @@ module Frontend.Parser (
     Action (..),
     SwitchGaurd (..),
     BlockStatement (..),
+    BloomType (..),
+    Variance (..),
+    Arg (..),
+    KindDomain (..),
+    KindArgument (..),
+    QuantifierArgument (..),
+    BloomKind (..),
+    QuantifierConstraint (..),
+    QuantifierBody (..),
     curlyItem,
-    expr
+    expr,
+    topLevel
 ) where
 import Data.Kind (Type)
 
@@ -307,7 +317,7 @@ data Condition
     deriving Show
 
 data InductiveFlow
-    = For String Expr Expr Action
+    = For RefFlavour String Expr Expr Action
     | Loop Expr
     | While Condition Expr Action
     deriving Show
@@ -349,10 +359,16 @@ data Action
 data SwitchGaurd = SwitchGaurd (Matcher (String, [Pattern])) Action
     deriving Show
 
+data AssignmentResidual
+    = Total
+    | ElseAct Action
+    | ElseGaurd (NonEmpty MatchGaurd)
+    deriving Show
+
 data BlockStatement
     = Act Action
     | Switch String [Expr] (NonEmpty SwitchGaurd)
-    | Let (Matcher Pattern) (Maybe BloomType) Expr (Maybe Action)
+    | Let (Matcher Pattern) (Maybe BloomType) Expr AssignmentResidual
     deriving Show
 
 flavour :: Parser RefFlavour
@@ -596,23 +612,24 @@ flow stmt = alt $ (Flow <$> opt label <*> loopingFlow stmt) :| [
 
 forIn :: Bool -> Parser InductiveFlow
 forIn stmt = For
-    <$> (keyword "for" *> snake)
+    <$> (keyword "for" *> flavour)
+    <*> snake
     <*> (keyword "in" *> expr)
     <*> (keyword "do" *> expr)
-    <*> optDefault Pass ((if stmt then optCurlyKeyword else keyword) "nobreak" *> action)
+    <*> optDefault Pass ((if stmt then optCurlyKeyword else keyword) "end" *> action)
 
-loop :: Parser InductiveFlow
-loop = Loop <$> (keyword "loop" *> expr)
+-- loop :: Parser InductiveFlow
+-- loop = Loop <$> (keyword "loop" *> expr)
 
-while :: Bool -> Parser InductiveFlow
-while stmt = (keyword "while" *> fmap While condition)
-    <*> (keyword "do" *> expr)
-    <*> optDefault Pass ((if stmt then optCurlyKeyword else keyword) "nobreak" *> action)
+-- while :: Bool -> Parser InductiveFlow
+-- while stmt = (keyword "while" *> fmap While condition)
+--     <*> (keyword "do" *> expr)
+--     <*> optDefault Pass ((if stmt then optCurlyKeyword else keyword) "end" *> action)
 
 loopingFlow :: Bool -> Parser InductiveFlow
 loopingFlow stmt = alt $ forIn stmt :| [
-        loop,
-        while stmt
+        -- loop,
+        -- while stmt
     ]
 
 labelPattern :: Parser (String, [Pattern])
@@ -629,7 +646,7 @@ letStmt = Let
     <$> (keyword "let" *> patt)
     <*> opt typed
     <*> Alt (keyword "=" *> expr) (keyword "?=" *> fmap Unwrap expr)
-    <*> opt (optCurlyKeyword "else" *> action)
+    <*> optDefault Total (optCurlyKeyword "else" *> Alt (ElseAct <$> action) (ElseGaurd <$> most1 matchGaurd))
 
 blockStmt = alt $ ((Run >>> Act) <$> flow True) :| [
         switchWith,
@@ -801,8 +818,8 @@ data CaseArg
 
 data StaticStatement
     = Define String (Maybe QuantifierBody) [Arg] (Maybe BloomType) (Maybe Expr)
-    | Struct String [KindArgument] [CaseArg] [Either PoisonID ADTStatement]
-    | InfixStruct String [KindArgument] CaseArg CaseArg [Either PoisonID ADTStatement]
+    -- | Struct String [KindArgument] [CaseArg] [Either PoisonID ADTStatement]
+    -- | InfixStruct String [KindArgument] CaseArg CaseArg [Either PoisonID ADTStatement]
     deriving Show
 
 defName :: Parser String
@@ -825,10 +842,10 @@ caseArg = Alt (Field Nothing <$> compactType) $ openRound *> alt (
         keyword "impl" *> (ImplWith <$> mostPostsSeperated (keyword "and") regularType <*> opt (snake <* keyword ":") <*> regularType)
     ]) <* closeRound
 
-struct :: Parser StaticStatement
-struct = (keyword "struct" *>) $ Alt
-    (Struct <$> snake <*> optKindPack kindArgument <*> most caseArg <*> recovCurly structBodyStatement)
-    (InfixStruct <$> symbol <*> optKindPack kindArgument <*> caseArg <*> caseArg <*> recovCurly structBodyStatement)
+-- struct :: Parser StaticStatement
+-- struct = (keyword "struct" *>) $ Alt
+--     (Struct <$> pascal <*> optKindPack kindArgument <*> most caseArg <*> recovCurly structBodyStatement)
+--     (InfixStruct <$> symbol <*> optKindPack kindArgument <*> caseArg <*> caseArg <*> recovCurly structBodyStatement)
 
 methodFlavour :: Parser MethodFlavour
 methodFlavour = optDefault CallByMove $ keyword "ref" *> refFlavour <&> CallByRef
@@ -853,3 +870,8 @@ implBlock = ImplBlock <$> (keyword "impl" *> regularType) <*> optTypeLevelIf <*>
 
 dataImplInterface :: Parser ADTStatement
 dataImplInterface = InterfaceImpl <$> opt (keyword "ref" *> refFlavour) <*> implBlock
+
+topLevel :: Parser StaticStatement
+topLevel = alt $ define :| [
+        -- struct
+    ]

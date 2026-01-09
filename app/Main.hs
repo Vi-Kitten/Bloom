@@ -8,10 +8,10 @@
 module Main (
     main
 ) where
-import Frontend (readLines, EditorInfo (..))
-import Frontend.Main (parseFile, lexFile)
+import Frontend (EditorInfo (..))
+import Frontend.Main (lexFile)
 import Reporting (runReporter)
-import Frontend.Parser (parse, expr, curlyItem)
+import Frontend.Parser (parse, expr, curlyItem, topLevel)
 
 debugEditor :: EditorInfo
 debugEditor = EditorInfo {
@@ -26,7 +26,7 @@ main = do
     (end, mtoks) <- lexFile debugEditor path
     let (except, events) = runReporter $ do
             toks <- mtoks
-            res <- parse end toks $ curlyItem *> expr
+            res <- parse end toks $ curlyItem *> topLevel
             return (toks, res)
     () <$ mapM print events
     case except of
@@ -39,3 +39,4 @@ main = do
             >> sequenceA [print tok | tok <- toks]
             >> putStrLn "parse success"
             >> print x
+

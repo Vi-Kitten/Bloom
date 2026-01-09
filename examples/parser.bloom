@@ -1,0 +1,38 @@
+data ParseRes[in T, out E, out A] {
+    case Continue Parser[T, E, A]
+    case Already A
+}
+
+interface Parser[in T, out E, out A] {
+    def munch(tok: T): Except[List1[E], ParseRes[T, E, A]]
+    def close: Except[List1[E], A]
+
+    def map f = new Parser {
+        .munch tok = self.munch(tok).map fn
+            | Continue px => Continue $ px.map f
+            | Already x => Already $ f x
+        .close = self.close.map f
+    }
+}
+
+def expect(select: Choice[E, T -> Except[E, A]]) = new Parser {
+    .munch tok = select.right(tok).map fn x => Continue $ wrap x
+    .close = Err select.left
+}
+
+def wrap x = new Parser {
+    .munch tok = Ok $ Already x
+    .close = Ok x
+}
+
+def seq pf px = new Parser {
+    .munch tok = pf.munch tok >>= fn
+        | Continue pf => Ok $ Continue $ seq pf px
+        | Already f   => px.map(f).munch tok
+    .close = pf.close <*> px.close
+}
+
+def alt px py = new Parser {
+    .munch tok = px.munch tok <+> py.munch tok
+    .close = px.close <+> py.close
+}
