@@ -13,7 +13,7 @@ common warnings
 executable bloom
     import:           warnings
     main-is:          Main.hs
-    other-modules:    Utils, Frontend, Frontend.Lexer, Frontend.Spanned, Frontend.Parser, Frontend.Main, Inference, Typing, Reporting
+    other-modules:    Utils, Frontend, Frontend.Lexer, Frontend.Spanned, Frontend.Parser, Frontend.Main, Reporting
     build-depends:    extra, containers, text, free, pipes, transformers, mtl, mmorph, base
     hs-source-dirs:   app
     default-language: Haskell2010
